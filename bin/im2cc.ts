@@ -144,7 +144,10 @@ function cmdSessions(): void {
   }
 }
 
-/** im2cc new <名称> [路径] — 创建新对话并注册（类似 tnh） */
+/** tmux session 名称前缀，避免和用户其他 tmux session 冲突 */
+const TMUX_PREFIX = 'im2cc-'
+
+/** im2cc new <名称> [路径] — 在 tmux 中创建新对话并注册（类似 tnh） */
 async function cmdNew(): Promise<void> {
   const name = process.argv[3]
   const pathArg = process.argv[4]
@@ -177,9 +180,18 @@ async function cmdNew(): Promise<void> {
   try {
     const { sessionId } = await createSession(validation.resolvedPath, config.defaultPermissionMode, name)
     register(name, sessionId, validation.resolvedPath)
-    console.log(`✅ 已创建 "${name}"`)
-    console.log(`   打开: im2cc open ${name}`)
-    console.log(`   飞书: /attach ${name}`)
+
+    // 在 tmux 中启动交互式 Claude Code
+    const tmuxSession = TMUX_PREFIX + name
+    try {
+      execSync(`tmux new-session -d -s "${tmuxSession}" -c "${validation.resolvedPath}" "claude --resume ${sessionId} --name 'im2cc:${name}'"`)
+      execSync(`tmux attach -t "${tmuxSession}"`, { stdio: 'inherit' })
+    } catch {
+      // tmux 不可用，直接启动
+      console.log(`✅ 已创建 "${name}"`)
+      console.log(`   打开: im2cc open ${name}`)
+      execSync(`claude --resume ${sessionId} --name "im2cc:${name}"`, { stdio: 'inherit', cwd: validation.resolvedPath })
+    }
   } catch (err) {
     console.error(`❌ 创建失败: ${err instanceof Error ? err.message : String(err)}`)
     process.exit(1)
@@ -242,8 +254,25 @@ async function cmdOpen(): Promise<void> {
     console.log(`🔄 已从飞书端断开 "${session.name}"`)
   }
 
+  // 在 tmux 中打开
+  const tmuxSession = TMUX_PREFIX + session.name
   console.log(`打开 "${session.name}" (${path.basename(session.cwd)})...`)
-  execSync(`claude --resume ${session.sessionId}`, { stdio: 'inherit', cwd: session.cwd })
+
+  try {
+    // 检查 tmux session 是否存在
+    execSync(`tmux has-session -t "${tmuxSession}" 2>/dev/null`)
+    // 存在，直接 attach
+    execSync(`tmux attach -t "${tmuxSession}"`, { stdio: 'inherit' })
+  } catch {
+    // 不存在，创建新的 tmux session
+    try {
+      execSync(`tmux new-session -d -s "${tmuxSession}" -c "${session.cwd}" "claude --resume ${session.sessionId} --name 'im2cc:${session.name}'"`)
+      execSync(`tmux attach -t "${tmuxSession}"`, { stdio: 'inherit' })
+    } catch {
+      // tmux 不可用，直接启动
+      execSync(`claude --resume ${session.sessionId} --name "im2cc:${session.name}"`, { stdio: 'inherit', cwd: session.cwd })
+    }
+  }
 }
 
 /** im2cc list — 列出所有已注册对话 */

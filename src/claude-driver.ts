@@ -70,14 +70,21 @@ export async function sendMessage(
 }
 
 /** 杀掉本地占用某个 session 的 Claude Code 进程 */
-export function killLocalSession(sessionId: string): boolean {
+export function killLocalSession(sessionName: string): boolean {
+  const tmuxSession = `im2cc-${sessionName}`
   try {
-    // 查找包含该 session ID 的 claude 进程
+    // 方式 1：通过 tmux session 名称关闭（最可靠）
+    execSync(`tmux has-session -t "${tmuxSession}" 2>/dev/null`)
+    execSync(`tmux kill-session -t "${tmuxSession}" 2>/dev/null`)
+    return true
+  } catch { /* tmux session 不存在 */ }
+
+  try {
+    // 方式 2：fallback，通过进程参数匹配
     const result = execSync(
-      `pgrep -f "claude.*${sessionId}" 2>/dev/null || true`,
+      `pgrep -f "claude.*${sessionName}" 2>/dev/null || true`,
       { encoding: 'utf-8' },
     ).trim()
-
     if (!result) return false
 
     const pids = result.split('\n').map(s => parseInt(s.trim())).filter(n => !isNaN(n) && n !== process.pid)

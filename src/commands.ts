@@ -137,8 +137,8 @@ async function handleAttach(args: string, groupId: string, config: Im2ccConfig):
   // 优先从注册表查找
   const reg = lookup(args)
   if (reg) {
-    // 独占：杀掉本地 Claude Code 进程
-    const killed = killLocalSession(reg.sessionId)
+    // 独占：关闭本地 tmux 中的 Claude Code
+    const killed = killLocalSession(reg.name)
     const cliVersion = getClaudeVersion()
     touch(reg.name)
     const binding = createBinding(groupId, reg.sessionId, reg.cwd, config.defaultPermissionMode, cliVersion)
