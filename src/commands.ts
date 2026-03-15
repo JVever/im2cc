@@ -11,7 +11,7 @@ import { createBinding, getBinding, archiveBinding, updateBinding } from './sess
 import { createSession, getClaudeVersion, killLocalSession } from './claude-driver.js'
 import { handleStop, getQueueStatus } from './queue.js'
 import { discoverSessions, findSession } from './discover.js'
-import { register, lookup, search, listRegistered, touch } from './registry.js'
+import { register, lookup, search, listRegistered, touch, remove } from './registry.js'
 import { log } from './logger.js'
 
 export interface ParsedCommand {
@@ -19,7 +19,8 @@ export interface ParsedCommand {
   args: string
 }
 
-const COMMANDS = new Set(['bind', 'unbind', 'mode', 'stop', 'new', 'attach', 'status', 'help'])
+// 统一命令名：电脑端和飞书端完全一致
+const COMMANDS = new Set(['fn', 'fc', 'fl', 'fk', 'fs', 'fd', 'mode', 'stop', 'help'])
 
 export function parseCommand(text: string): ParsedCommand | null {
   const trimmed = text.trim()
@@ -35,19 +36,20 @@ export async function handleCommand(
   config: Im2ccConfig,
 ): Promise<string> {
   switch (cmd.command) {
-    case 'bind': return handleBind(cmd.args, groupId, config)
-    case 'attach': return handleAttach(cmd.args, groupId, config)
-    case 'unbind': return handleUnbind(groupId)
+    case 'fn': return handleFn(cmd.args, groupId, config)
+    case 'fc': return handleFc(cmd.args, groupId, config)
+    case 'fl': return handleFl()
+    case 'fk': return handleFk(cmd.args, groupId)
+    case 'fs': return handleFs(groupId)
+    case 'fd': return handleFd(groupId)
     case 'mode': return handleMode(cmd.args, groupId)
     case 'stop': return handleStop(groupId)
-    case 'new': return handleNew(cmd.args, groupId, config)
-    case 'status': return handleStatus(groupId)
     case 'help': return handleHelp()
     default: return `未知命令: /${cmd.command}`
   }
 }
 
-async function handleBind(args: string, groupId: string, config: Im2ccConfig): Promise<string> {
+async function handleFn(args: string, groupId: string, config: Im2ccConfig): Promise<string> {
   // 用法: /bind <名称> <项目>  — 创建新对话并注册
   // 或:   /bind <名称>         — 如果名称就是项目目录名
   // 或:   /bind                — 列出可用项目
@@ -95,7 +97,7 @@ async function handleBind(args: string, groupId: string, config: Im2ccConfig): P
   }
 }
 
-async function handleAttach(args: string, groupId: string, config: Im2ccConfig): Promise<string> {
+async function handleFc(args: string, groupId: string, config: Im2ccConfig): Promise<string> {
   const existing = getBinding(groupId)
   if (existing) {
     return `该群已连接，先 /unbind 再 /attach`
@@ -190,7 +192,7 @@ async function handleAttach(args: string, groupId: string, config: Im2ccConfig):
   return `未找到 "${args}"\n发 /attach 查看所有可用对话`
 }
 
-function handleUnbind(groupId: string): string {
+function handleFd(groupId: string): string {
   const binding = archiveBinding(groupId)
   if (!binding) return '该群未绑定任何 session'
 
@@ -233,7 +235,40 @@ function handleMode(args: string, groupId: string): string {
   return `⚙️ 模式已切换为 ${normalized}（下一条消息生效）`
 }
 
-async function handleNew(args: string, groupId: string, config: Im2ccConfig): Promise<string> {
+function handleFl(): string {
+  const registered = listRegistered()
+  if (registered.length === 0) return '没有已注册的对话。用 /fn <名称> 创建。'
+
+  const lines = registered.map(s => {
+    return `  ${s.name} (${path.basename(s.cwd)})`
+  })
+  return `📋 已注册的对话:\n${lines.join('\n')}`
+}
+
+function handleFk(args: string, groupId: string): string {
+  if (!args) return '用法: /fk <名称>'
+
+  const session = lookup(args)
+  if (!session) return `未找到 "${args}"`
+
+  // 关闭本地 tmux
+  killLocalSession(session.name)
+
+  // 如果飞书绑定了这个 session，解绑
+  const binding = getBinding(groupId)
+  if (binding && binding.sessionId === session.sessionId) {
+    archiveBinding(groupId)
+  }
+
+  remove(args)
+
+  return [
+    `✅ 已终止 "${args}"`,
+    `如需恢复: claude --resume ${session.sessionId}`,
+  ].join('\n')
+}
+
+async function handleFnNew(args: string, groupId: string, config: Im2ccConfig): Promise<string> {
   // /new <名称> [项目]
   if (!args) return '用法: /new <对话名称> [项目名]'
 
@@ -268,7 +303,7 @@ async function handleNew(args: string, groupId: string, config: Im2ccConfig): Pr
   }
 }
 
-function handleStatus(groupId: string): string {
+function handleFs(groupId: string): string {
   const binding = getBinding(groupId)
   if (!binding) return '该群未绑定任何 session'
 
@@ -288,16 +323,17 @@ function handleStatus(groupId: string): string {
 
 function handleHelp(): string {
   return [
-    '📖 im2cc 命令',
+    '📖 im2cc 命令（电脑/飞书通用）',
     '',
-    '/attach [名称]  — 接入电脑上已有的对话（核心功能）',
-    '/bind [项目名]  — 新建对话并绑定项目',
-    '/unbind         — 解绑',
-    '/mode <模式>    — 切换模式 (YOLO|plan|default|auto-edit)',
-    '/stop           — 中断执行',
-    '/new [项目名]   — 新建会话',
-    '/status         — 查看状态',
-    '/help           — 帮助',
+    '/fn <名称> [项目]  — 创建新对话',
+    '/fc [名称]         — 接入已有对话',
+    '/fl                — 列出所有对话',
+    '/fk <名称>         — 终止对话',
+    '/fd                — 断开当前对话',
+    '/fs                — 查看当前状态',
+    '',
+    '/mode <模式>       — 切换模式 (YOLO|plan|default|auto-edit)',
+    '/stop              — 中断当前执行',
     '',
     '直接发消息即转给 Claude Code',
   ].join('\n')
