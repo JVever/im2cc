@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.js
+*.js.map
+*.d.ts
+!bin/im2cc.ts
+
+.env
+.env.*
+
+*.log
+*.pid
+
+.DS_Store
