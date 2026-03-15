@@ -10,6 +10,7 @@ import { validatePath, resolvePath, listProjects } from './security.js'
 import { createBinding, getBinding, archiveBinding, updateBinding } from './session.js'
 import { createSession, getClaudeVersion } from './claude-driver.js'
 import { handleStop, getQueueStatus } from './queue.js'
+import { discoverSessions, findSession } from './discover.js'
 import { log } from './logger.js'
 
 export interface ParsedCommand {
@@ -17,7 +18,7 @@ export interface ParsedCommand {
   args: string
 }
 
-const COMMANDS = new Set(['bind', 'unbind', 'mode', 'stop', 'new', 'status', 'help'])
+const COMMANDS = new Set(['bind', 'unbind', 'mode', 'stop', 'new', 'attach', 'status', 'help'])
 
 export function parseCommand(text: string): ParsedCommand | null {
   const trimmed = text.trim()
@@ -34,6 +35,7 @@ export async function handleCommand(
 ): Promise<string> {
   switch (cmd.command) {
     case 'bind': return handleBind(cmd.args, groupId, config)
+    case 'attach': return handleAttach(cmd.args, groupId, config)
     case 'unbind': return handleUnbind(groupId)
     case 'mode': return handleMode(cmd.args, groupId)
     case 'stop': return handleStop(groupId)
@@ -94,6 +96,72 @@ async function handleBind(args: string, groupId: string, config: Im2ccConfig): P
   } catch (err) {
     return `❌ 创建 session 失败: ${err instanceof Error ? err.message : String(err)}`
   }
+}
+
+async function handleAttach(args: string, groupId: string, config: Im2ccConfig): Promise<string> {
+  const existing = getBinding(groupId)
+  if (existing) {
+    return `该群已绑定到 ${path.basename(existing.cwd)} (${existing.sessionId.slice(0, 8)}...)\n先 /unbind 再 /attach`
+  }
+
+  // 无参数：列出最近对话
+  if (!args) {
+    const sessions = await discoverSessions(10)
+    if (sessions.length === 0) return '未找到本地 Claude Code 对话'
+
+    const timeAgo = (d: Date) => {
+      const mins = Math.floor((Date.now() - d.getTime()) / 60000)
+      if (mins < 1) return '刚刚'
+      if (mins < 60) return `${mins}分钟前`
+      const hrs = Math.floor(mins / 60)
+      if (hrs < 24) return `${hrs}小时前`
+      return `${Math.floor(hrs / 24)}天前`
+    }
+
+    const list = sessions.map((s, i) => {
+      const label = s.name || s.firstMessage || '未命名'
+      return `  ${i + 1}. ${label} (${s.projectName}) — ${timeAgo(s.lastModified)}`
+    }).join('\n')
+
+    return `📋 最近的 Claude Code 对话:\n${list}\n\n发 /attach <名称> 接入`
+  }
+
+  // 有参数：模糊匹配
+  const matches = await findSession(args)
+
+  if (matches.length === 0) {
+    return `未找到匹配 "${args}" 的对话\n发 /attach 查看所有对话`
+  }
+
+  if (matches.length > 1) {
+    const list = matches.slice(0, 5).map((s, i) => {
+      const label = s.name || s.firstMessage || '未命名'
+      return `  ${i + 1}. ${label} (${s.projectName}) [${s.sessionId.slice(0, 8)}]`
+    }).join('\n')
+    return `多个对话匹配 "${args}":\n${list}\n\n请用更精确的名称或 session ID 前缀`
+  }
+
+  // 唯一匹配，执行 attach
+  const session = matches[0]
+  const cliVersion = getClaudeVersion()
+
+  const binding = createBinding(
+    groupId,
+    session.sessionId,
+    session.projectPath,
+    config.defaultPermissionMode,
+    cliVersion,
+  )
+
+  log(`[${groupId}] attach 到 ${session.name} (${session.sessionId})`)
+
+  return [
+    `✅ 已接入: ${session.name || '未命名对话'}`,
+    `📁 ${session.projectName} (${session.projectPath})`,
+    `⚙️ 模式: ${binding.permissionMode}`,
+    '',
+    `回到电脑: cd ${session.projectPath} && claude --resume ${session.sessionId}`,
+  ].join('\n')
 }
 
 function handleUnbind(groupId: string): string {
@@ -193,7 +261,8 @@ function handleHelp(): string {
   return [
     '📖 im2cc 命令',
     '',
-    '/bind [项目名]  — 绑定（无参数列出可用项目）',
+    '/attach [名称]  — 接入电脑上已有的对话（核心功能）',
+    '/bind [项目名]  — 新建对话并绑定项目',
     '/unbind         — 解绑',
     '/mode <模式>    — 切换模式 (YOLO|plan|default|auto-edit)',
     '/stop           — 中断执行',
