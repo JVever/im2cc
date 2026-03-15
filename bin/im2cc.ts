@@ -11,7 +11,9 @@ import os from 'node:os'
 import { execSync, fork } from 'node:child_process'
 import { loadConfig, saveConfig, configExists, getPidFile, getLogDir, getConfigDir, type Im2ccConfig } from '../src/config.js'
 import { listActiveBindings } from '../src/session.js'
-import { getClaudeVersion } from '../src/claude-driver.js'
+import { getClaudeVersion, createSession } from '../src/claude-driver.js'
+import { register, lookup, listRegistered } from '../src/registry.js'
+import { expandPath, validatePath } from '../src/security.js'
 import readline from 'node:readline'
 
 const command = process.argv[2]
@@ -22,7 +24,9 @@ switch (command) {
   case 'status': cmdStatus(); break
   case 'logs': cmdLogs(); break
   case 'sessions': cmdSessions(); break
-  case 'resume': cmdResume(); break
+  case 'new': await cmdNew(); break
+  case 'open': cmdOpen(); break
+  case 'list': cmdList(); break
   case 'setup': await cmdSetup(); break
   case 'install-service': cmdInstallService(); break
   case 'doctor': cmdDoctor(); break
@@ -31,16 +35,22 @@ switch (command) {
 
 用法: im2cc <command>
 
-命令:
-  setup            交互式配置飞书 App 凭证
-  start            启动守护进程
-  stop             停止守护进程
-  status           查看运行状态
-  logs             查看日志 (tail -f)
-  sessions         列出所有活跃绑定
-  resume [项目名]  回到电脑后一键恢复对话
-  install-service  安装 macOS 开机自启 (LaunchAgent)
-  doctor           检查环境和依赖状态
+对话管理:
+  new <名称> [路径]  创建新对话（类似 tnh）
+  open <名称>        打开已有对话（类似 tc）
+  list               列出所有已注册对话
+
+守护进程:
+  setup              配置飞书 App 凭证
+  start              启动守护进程
+  stop               停止守护进程
+  status             查看运行状态
+  logs               查看日志
+
+运维:
+  sessions           列出飞书活跃绑定
+  install-service    安装 macOS 开机自启
+  doctor             检查环境
 `)
 }
 
@@ -124,53 +134,109 @@ function cmdLogs(): void {
 function cmdSessions(): void {
   const bindings = listActiveBindings()
   if (bindings.length === 0) {
-    console.log('没有活跃的绑定')
+    console.log('没有飞书活跃绑定')
     return
   }
 
-  console.log('活跃绑定:')
-  console.log('─'.repeat(60))
+  console.log('飞书活跃绑定:')
   for (const b of bindings) {
-    const name = path.basename(b.cwd)
-    console.log(`  📁 ${name}`)
-    console.log(`     ${b.cwd}`)
-    console.log(`     模式: ${b.permissionMode} | 轮次: ${b.turnCount}`)
-    console.log(`     恢复: im2cc resume ${name}`)
-    console.log('─'.repeat(60))
+    console.log(`  ${path.basename(b.cwd)} → ${b.sessionId.slice(0, 8)}...`)
   }
 }
 
-function cmdResume(): void {
-  const target = process.argv[3]
-  const bindings = listActiveBindings()
+/** im2cc new <名称> [路径] — 创建新对话并注册（类似 tnh） */
+async function cmdNew(): Promise<void> {
+  const name = process.argv[3]
+  const pathArg = process.argv[4]
 
-  if (bindings.length === 0) {
-    console.log('没有活跃的绑定')
+  if (!name) {
+    console.log('用法: im2cc new <对话名称> [项目路径]')
+    console.log('例如: im2cc new auth-refactor ~/Code/im2cc')
+    console.log('      im2cc new bugfix       (使用当前目录)')
     return
   }
 
-  let binding
-  if (target) {
-    // 按项目名匹配
-    binding = bindings.find(b => path.basename(b.cwd).toLowerCase() === target.toLowerCase())
-      ?? bindings.find(b => path.basename(b.cwd).toLowerCase().includes(target.toLowerCase()))
-    if (!binding) {
-      console.log(`未找到项目 "${target}"`)
-      console.log('可用项目:')
-      for (const b of bindings) console.log(`  - ${path.basename(b.cwd)}`)
+  // 检查名称是否已存在
+  const existing = lookup(name)
+  if (existing) {
+    console.log(`"${name}" 已存在。用 im2cc open ${name} 打开，或换个名称。`)
+    return
+  }
+
+  const cwd = pathArg ? expandPath(pathArg) : process.cwd()
+
+  const config = loadConfig()
+  const validation = validatePath(cwd, config)
+  if (!validation.valid) {
+    console.log(`❌ ${validation.error}`)
+    return
+  }
+
+  console.log(`创建新对话 "${name}" → ${validation.resolvedPath}...`)
+
+  try {
+    const { sessionId } = await createSession(validation.resolvedPath, config.defaultPermissionMode, name)
+    register(name, sessionId, validation.resolvedPath)
+    console.log(`✅ 已创建 "${name}"`)
+    console.log(`   打开: im2cc open ${name}`)
+    console.log(`   飞书: /attach ${name}`)
+  } catch (err) {
+    console.error(`❌ 创建失败: ${err instanceof Error ? err.message : String(err)}`)
+    process.exit(1)
+  }
+}
+
+/** im2cc open <名称> — 打开已有对话（类似 tc） */
+function cmdOpen(): void {
+  const target = process.argv[3]
+
+  if (!target) {
+    // 列出所有对话供选择
+    const all = listRegistered()
+    if (all.length === 0) {
+      console.log('没有已注册的对话。用 im2cc new <名称> 创建。')
       return
     }
-  } else if (bindings.length === 1) {
-    binding = bindings[0]
-  } else {
-    console.log('多个活跃绑定，请指定项目名:')
-    for (const b of bindings) console.log(`  im2cc resume ${path.basename(b.cwd)}`)
+    console.log('已注册的对话:')
+    for (const s of all) {
+      console.log(`  ${s.name} (${path.basename(s.cwd)})`)
+    }
+    console.log(`\nim2cc open <名称> 打开`)
     return
   }
 
-  const name = path.basename(binding.cwd)
-  console.log(`恢复 ${name} (${binding.sessionId})...`)
-  execSync(`claude --resume ${binding.sessionId}`, { stdio: 'inherit', cwd: binding.cwd })
+  const session = lookup(target)
+  if (!session) {
+    console.log(`未找到 "${target}"`)
+    const all = listRegistered()
+    if (all.length > 0) {
+      console.log('可用对话:')
+      for (const s of all) console.log(`  ${s.name}`)
+    }
+    return
+  }
+
+  console.log(`打开 "${session.name}" (${path.basename(session.cwd)})...`)
+  execSync(`claude --resume ${session.sessionId}`, { stdio: 'inherit', cwd: session.cwd })
+}
+
+/** im2cc list — 列出所有已注册对话 */
+function cmdList(): void {
+  const all = listRegistered()
+  if (all.length === 0) {
+    console.log('没有已注册的对话。用 im2cc new <名称> 创建。')
+    return
+  }
+
+  console.log('已注册的对话:')
+  console.log('─'.repeat(50))
+  for (const s of all) {
+    console.log(`  📛 ${s.name}`)
+    console.log(`     📁 ${path.basename(s.cwd)} (${s.cwd})`)
+    console.log(`     打开: im2cc open ${s.name}`)
+    console.log(`     飞书: /attach ${s.name}`)
+    console.log('─'.repeat(50))
+  }
 }
 
 async function cmdSetup(): Promise<void> {

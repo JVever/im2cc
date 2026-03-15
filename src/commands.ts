@@ -11,6 +11,7 @@ import { createBinding, getBinding, archiveBinding, updateBinding } from './sess
 import { createSession, getClaudeVersion } from './claude-driver.js'
 import { handleStop, getQueueStatus } from './queue.js'
 import { discoverSessions, findSession } from './discover.js'
+import { register, lookup, search, listRegistered, touch } from './registry.js'
 import { log } from './logger.js'
 
 export interface ParsedCommand {
@@ -47,121 +48,143 @@ export async function handleCommand(
 }
 
 async function handleBind(args: string, groupId: string, config: Im2ccConfig): Promise<string> {
-  // 无参数：列出可用项目
+  // 用法: /bind <名称> <项目>  — 创建新对话并注册
+  // 或:   /bind <名称>         — 如果名称就是项目目录名
+  // 或:   /bind                — 列出可用项目
   if (!args) {
     const projects = listProjects(config)
-    if (projects.length === 0) {
-      return `${config.pathWhitelist.join(', ')} 下没有找到项目目录`
-    }
+    if (projects.length === 0) return `${config.pathWhitelist.join(', ')} 下没有找到项目目录`
     const list = projects.map((p, i) => `  ${i + 1}. ${p}`).join('\n')
-    return `📁 可用项目:\n${list}\n\n直接发 /bind <项目名> 绑定\n例如: /bind ${projects[0]}`
+    return `📁 可用项目:\n${list}\n\n用法: /bind <对话名称> [项目名]\n例如: /bind auth-refactor im2cc`
   }
 
   const existing = getBinding(groupId)
   if (existing) {
-    return `该群已绑定到 ${path.basename(existing.cwd)}\n如需重新绑定，请先 /unbind 或使用 /new <项目名>`
+    return `该群已连接到 "${path.basename(existing.cwd)}"\n先 /unbind 再操作`
   }
 
-  // 智能路径解析：短名称 → 白名单目录下查找
-  const resolved = resolvePath(args, config)
+  const parts = args.split(/\s+/)
+  const sessionName = parts[0]
+  const projectHint = parts[1] || sessionName // 默认用对话名称作为项目名
+
+  // 解析项目路径
+  const resolved = resolvePath(projectHint, config)
   const validation = validatePath(resolved, config)
   if (!validation.valid) return `❌ ${validation.error}`
 
-  const projectName = path.basename(validation.resolvedPath)
-  log(`[${groupId}] 绑定到 ${validation.resolvedPath}`)
+  log(`[${groupId}] 创建新对话 "${sessionName}" → ${validation.resolvedPath}`)
 
   try {
     const cliVersion = getClaudeVersion()
-    const { sessionId } = await createSession(
-      validation.resolvedPath,
-      config.defaultPermissionMode,
-      projectName,  // session 命名
-    )
+    const { sessionId } = await createSession(validation.resolvedPath, config.defaultPermissionMode, sessionName)
 
-    const binding = createBinding(
-      groupId,
-      sessionId,
-      validation.resolvedPath,
-      config.defaultPermissionMode,
-      cliVersion,
-    )
+    // 注册到 registry
+    register(sessionName, sessionId, validation.resolvedPath)
+
+    const binding = createBinding(groupId, sessionId, validation.resolvedPath, config.defaultPermissionMode, cliVersion)
 
     return [
-      `✅ 已绑定 Claude Code → ${projectName}`,
-      `📁 ${binding.cwd}`,
-      `⚙️ 模式: ${binding.permissionMode.toUpperCase()}`,
+      `✅ 新对话 "${sessionName}"`,
+      `📁 ${path.basename(validation.resolvedPath)}`,
+      `⚙️ 模式: ${binding.permissionMode}`,
       '',
-      `回到电脑: claude --resume "${projectName}"`,
+      `回到电脑: im2cc open ${sessionName}`,
     ].join('\n')
   } catch (err) {
-    return `❌ 创建 session 失败: ${err instanceof Error ? err.message : String(err)}`
+    return `❌ 创建失败: ${err instanceof Error ? err.message : String(err)}`
   }
 }
 
 async function handleAttach(args: string, groupId: string, config: Im2ccConfig): Promise<string> {
   const existing = getBinding(groupId)
   if (existing) {
-    return `该群已绑定到 ${path.basename(existing.cwd)} (${existing.sessionId.slice(0, 8)}...)\n先 /unbind 再 /attach`
+    return `该群已连接，先 /unbind 再 /attach`
   }
 
-  // 无参数：列出最近对话
+  // 无参数：列出注册表 + 最近发现的对话
   if (!args) {
-    const sessions = await discoverSessions(10)
-    if (sessions.length === 0) return '未找到本地 Claude Code 对话'
+    const registered = listRegistered()
+    const lines: string[] = []
 
-    const timeAgo = (d: Date) => {
-      const mins = Math.floor((Date.now() - d.getTime()) / 60000)
-      if (mins < 1) return '刚刚'
-      if (mins < 60) return `${mins}分钟前`
-      const hrs = Math.floor(mins / 60)
-      if (hrs < 24) return `${hrs}小时前`
-      return `${Math.floor(hrs / 24)}天前`
+    if (registered.length > 0) {
+      lines.push('📋 已注册的对话:')
+      for (const s of registered) {
+        lines.push(`  ${s.name} (${path.basename(s.cwd)})`)
+      }
+      lines.push('')
     }
 
-    const list = sessions.map((s, i) => {
-      const label = s.name || s.firstMessage || '未命名'
-      return `  ${i + 1}. ${label} (${s.projectName}) — ${timeAgo(s.lastModified)}`
-    }).join('\n')
+    // 补充：文件系统扫描发现未注册的对话
+    const discovered = await discoverSessions(8)
+    const registeredIds = new Set(registered.map(r => r.sessionId))
+    const unregistered = discovered.filter(d => !registeredIds.has(d.sessionId))
 
-    return `📋 最近的 Claude Code 对话:\n${list}\n\n发 /attach <名称> 接入`
+    if (unregistered.length > 0) {
+      lines.push('💡 电脑上最近的对话 (未注册):')
+      for (const s of unregistered.slice(0, 5)) {
+        const label = s.name || s.firstMessage?.slice(0, 30) || '未命名'
+        lines.push(`  ${label} (${s.projectName}) [${s.sessionId.slice(0, 8)}]`)
+      }
+      lines.push('')
+    }
+
+    if (lines.length === 0) return '没有可用的对话'
+
+    lines.push('发 /attach <名称> 接入')
+    return lines.join('\n')
   }
 
-  // 有参数：模糊匹配
-  const matches = await findSession(args)
+  // 优先从注册表查找
+  const reg = lookup(args)
+  if (reg) {
+    const cliVersion = getClaudeVersion()
+    touch(reg.name)
+    const binding = createBinding(groupId, reg.sessionId, reg.cwd, config.defaultPermissionMode, cliVersion)
+    log(`[${groupId}] attach → "${reg.name}" (${reg.sessionId})`)
 
-  if (matches.length === 0) {
-    return `未找到匹配 "${args}" 的对话\n发 /attach 查看所有对话`
+    return [
+      `✅ 已接入 "${reg.name}"`,
+      `📁 ${path.basename(reg.cwd)}`,
+      `⚙️ 模式: ${binding.permissionMode}`,
+      '',
+      `回到电脑: im2cc open ${reg.name}`,
+    ].join('\n')
   }
 
-  if (matches.length > 1) {
-    const list = matches.slice(0, 5).map((s, i) => {
-      const label = s.name || s.firstMessage || '未命名'
-      return `  ${i + 1}. ${label} (${s.projectName}) [${s.sessionId.slice(0, 8)}]`
-    }).join('\n')
-    return `多个对话匹配 "${args}":\n${list}\n\n请用更精确的名称或 session ID 前缀`
+  // 注册表没有，尝试模糊搜索注册表
+  const regMatches = search(args)
+  if (regMatches.length > 0) {
+    const list = regMatches.map(s => `  ${s.name} (${path.basename(s.cwd)})`).join('\n')
+    return `多个匹配:\n${list}\n\n请输入更精确的名称`
   }
 
-  // 唯一匹配，执行 attach
-  const session = matches[0]
-  const cliVersion = getClaudeVersion()
+  // 最后尝试文件系统扫描
+  const discovered = await findSession(args)
+  if (discovered.length === 1) {
+    const s = discovered[0]
+    const cliVersion = getClaudeVersion()
+    const binding = createBinding(groupId, s.sessionId, s.projectPath, config.defaultPermissionMode, cliVersion)
+    // 自动注册
+    register(args, s.sessionId, s.projectPath)
+    log(`[${groupId}] attach (discovered) → "${args}" (${s.sessionId})`)
 
-  const binding = createBinding(
-    groupId,
-    session.sessionId,
-    session.projectPath,
-    config.defaultPermissionMode,
-    cliVersion,
-  )
+    return [
+      `✅ 已接入 "${s.name || args}"`,
+      `📁 ${s.projectName}`,
+      `⚙️ 模式: ${binding.permissionMode}`,
+      '',
+      `回到电脑: im2cc open ${args}`,
+    ].join('\n')
+  }
 
-  log(`[${groupId}] attach 到 ${session.name} (${session.sessionId})`)
+  if (discovered.length > 1) {
+    const list = discovered.slice(0, 5).map(s =>
+      `  ${s.name || s.firstMessage?.slice(0, 30) || '未命名'} (${s.projectName}) [${s.sessionId.slice(0, 8)}]`
+    ).join('\n')
+    return `多个对话匹配:\n${list}\n\n请用更精确的名称`
+  }
 
-  return [
-    `✅ 已接入: ${session.name || '未命名对话'}`,
-    `📁 ${session.projectName} (${session.projectPath})`,
-    `⚙️ 模式: ${binding.permissionMode}`,
-    '',
-    `回到电脑: cd ${session.projectPath} && claude --resume ${session.sessionId}`,
-  ].join('\n')
+  return `未找到 "${args}"\n发 /attach 查看所有可用对话`
 }
 
 function handleUnbind(groupId: string): string {
@@ -208,34 +231,37 @@ function handleMode(args: string, groupId: string): string {
 }
 
 async function handleNew(args: string, groupId: string, config: Im2ccConfig): Promise<string> {
+  // /new <名称> [项目]
+  if (!args) return '用法: /new <对话名称> [项目名]'
+
   const old = archiveBinding(groupId)
+  const parts = args.split(/\s+/)
+  const sessionName = parts[0]
+  const projectHint = parts[1] || (old ? path.basename(old.cwd) : sessionName)
 
-  // 支持短名称
-  const rawPath = args || (old ? path.basename(old.cwd) : '')
-  if (!rawPath) return '请指定项目名: /new <项目名>'
-
-  const resolved = resolvePath(rawPath, config)
+  const resolved = resolvePath(projectHint, config)
   const validation = validatePath(resolved, config)
   if (!validation.valid) return `❌ ${validation.error}`
 
-  const projectName = path.basename(validation.resolvedPath)
-
   try {
     const cliVersion = getClaudeVersion()
-    const { sessionId } = await createSession(validation.resolvedPath, config.defaultPermissionMode, projectName)
+    const { sessionId } = await createSession(validation.resolvedPath, config.defaultPermissionMode, sessionName)
+
+    register(sessionName, sessionId, validation.resolvedPath)
     const binding = createBinding(groupId, sessionId, validation.resolvedPath, config.defaultPermissionMode, cliVersion)
 
-    const lines = ['✅ 新会话已创建']
-    if (old) lines.push(`旧会话: claude --resume "${path.basename(old.cwd)}"`)
+    const lines = ['✅ 新对话已创建']
+    if (old) lines.push(`旧对话仍可通过 /attach 恢复`)
     lines.push(
-      `📁 ${binding.cwd}`,
-      `⚙️ 模式: ${binding.permissionMode.toUpperCase()}`,
+      `📛 ${sessionName}`,
+      `📁 ${path.basename(validation.resolvedPath)}`,
+      `⚙️ 模式: ${binding.permissionMode}`,
       '',
-      `回到电脑: claude --resume "${projectName}"`,
+      `回到电脑: im2cc open ${sessionName}`,
     )
     return lines.join('\n')
   } catch (err) {
-    return `❌ 创建新 session 失败: ${err instanceof Error ? err.message : String(err)}`
+    return `❌ 创建失败: ${err instanceof Error ? err.message : String(err)}`
   }
 }
 
