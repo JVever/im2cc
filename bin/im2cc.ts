@@ -25,7 +25,7 @@ switch (command) {
   case 'logs': cmdLogs(); break
   case 'sessions': cmdSessions(); break
   case 'new': await cmdNew(); break
-  case 'open': cmdOpen(); break
+  case 'open': await cmdOpen(); break
   case 'list': cmdList(); break
   case 'setup': await cmdSetup(); break
   case 'install-service': cmdInstallService(); break
@@ -187,7 +187,7 @@ async function cmdNew(): Promise<void> {
 }
 
 /** im2cc open <名称> — 打开已有对话（类似 tc） */
-function cmdOpen(): void {
+async function cmdOpen(): Promise<void> {
   const target = process.argv[3]
 
   if (!target) {
@@ -214,6 +214,32 @@ function cmdOpen(): void {
       for (const s of all) console.log(`  ${s.name}`)
     }
     return
+  }
+
+  // 独占：解绑飞书端
+  const bindings = listActiveBindings()
+  const feishuBinding = bindings.find(b => b.sessionId === session.sessionId)
+  if (feishuBinding) {
+    // 归档飞书绑定
+    const { archiveBinding } = await import('../src/session.js')
+    archiveBinding(feishuBinding.feishuGroupId)
+
+    // 尝试通知飞书群
+    try {
+      const config = loadConfig()
+      const lark = await import('@larksuiteoapi/node-sdk')
+      const client = new lark.Client({ appId: config.feishu.appId, appSecret: config.feishu.appSecret })
+      await client.im.message.create({
+        params: { receive_id_type: 'chat_id' },
+        data: {
+          receive_id: feishuBinding.feishuGroupId,
+          msg_type: 'text',
+          content: JSON.stringify({ text: `🔄 对话 "${session.name}" 已转移到电脑端` }),
+        },
+      })
+    } catch { /* 通知失败不影响主流程 */ }
+
+    console.log(`🔄 已从飞书端断开 "${session.name}"`)
   }
 
   console.log(`打开 "${session.name}" (${path.basename(session.cwd)})...`)

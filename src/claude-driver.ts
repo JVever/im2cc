@@ -69,6 +69,27 @@ export async function sendMessage(
   return { output, childProcess: child }
 }
 
+/** 杀掉本地占用某个 session 的 Claude Code 进程 */
+export function killLocalSession(sessionId: string): boolean {
+  try {
+    // 查找包含该 session ID 的 claude 进程
+    const result = execSync(
+      `pgrep -f "claude.*${sessionId}" 2>/dev/null || true`,
+      { encoding: 'utf-8' },
+    ).trim()
+
+    if (!result) return false
+
+    const pids = result.split('\n').map(s => parseInt(s.trim())).filter(n => !isNaN(n) && n !== process.pid)
+    for (const pid of pids) {
+      try { process.kill(pid, 'SIGTERM') } catch { /* 已退出 */ }
+    }
+    return pids.length > 0
+  } catch {
+    return false
+  }
+}
+
 /** 中断正在运行的 CLI 进程：SIGINT → 5s → SIGTERM → 5s → SIGKILL */
 export async function interrupt(child: ChildProcess): Promise<void> {
   if (!child.pid || child.exitCode !== null) return

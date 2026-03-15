@@ -8,7 +8,7 @@ import path from 'node:path'
 import type { Im2ccConfig } from './config.js'
 import { validatePath, resolvePath, listProjects } from './security.js'
 import { createBinding, getBinding, archiveBinding, updateBinding } from './session.js'
-import { createSession, getClaudeVersion } from './claude-driver.js'
+import { createSession, getClaudeVersion, killLocalSession } from './claude-driver.js'
 import { handleStop, getQueueStatus } from './queue.js'
 import { discoverSessions, findSession } from './discover.js'
 import { register, lookup, search, listRegistered, touch } from './registry.js'
@@ -137,18 +137,21 @@ async function handleAttach(args: string, groupId: string, config: Im2ccConfig):
   // 优先从注册表查找
   const reg = lookup(args)
   if (reg) {
+    // 独占：杀掉本地 Claude Code 进程
+    const killed = killLocalSession(reg.sessionId)
     const cliVersion = getClaudeVersion()
     touch(reg.name)
     const binding = createBinding(groupId, reg.sessionId, reg.cwd, config.defaultPermissionMode, cliVersion)
-    log(`[${groupId}] attach → "${reg.name}" (${reg.sessionId})`)
+    log(`[${groupId}] attach → "${reg.name}" (${reg.sessionId})${killed ? ' [已关闭本地进程]' : ''}`)
 
     return [
       `✅ 已接入 "${reg.name}"`,
+      killed ? '🔄 已关闭电脑端的对话' : '',
       `📁 ${path.basename(reg.cwd)}`,
       `⚙️ 模式: ${binding.permissionMode}`,
       '',
       `回到电脑: im2cc open ${reg.name}`,
-    ].join('\n')
+    ].filter(Boolean).join('\n')
   }
 
   // 注册表没有，尝试模糊搜索注册表
