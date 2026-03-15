@@ -22,6 +22,7 @@ switch (command) {
   case 'status': cmdStatus(); break
   case 'logs': cmdLogs(); break
   case 'sessions': cmdSessions(); break
+  case 'resume': cmdResume(); break
   case 'setup': await cmdSetup(); break
   case 'install-service': cmdInstallService(); break
   case 'doctor': cmdDoctor(); break
@@ -37,6 +38,7 @@ switch (command) {
   status           查看运行状态
   logs             查看日志 (tail -f)
   sessions         列出所有活跃绑定
+  resume [项目名]  回到电脑后一键恢复对话
   install-service  安装 macOS 开机自启 (LaunchAgent)
   doctor           检查环境和依赖状态
 `)
@@ -127,15 +129,48 @@ function cmdSessions(): void {
   }
 
   console.log('活跃绑定:')
-  console.log('─'.repeat(80))
+  console.log('─'.repeat(60))
   for (const b of bindings) {
-    console.log(`  群: ${b.feishuGroupId}`)
-    console.log(`  目录: ${b.cwd}`)
-    console.log(`  Session: ${b.sessionId}`)
-    console.log(`  模式: ${b.permissionMode} | 轮次: ${b.turnCount}`)
-    console.log(`  恢复: claude --resume ${b.sessionId}`)
-    console.log('─'.repeat(80))
+    const name = path.basename(b.cwd)
+    console.log(`  📁 ${name}`)
+    console.log(`     ${b.cwd}`)
+    console.log(`     模式: ${b.permissionMode} | 轮次: ${b.turnCount}`)
+    console.log(`     恢复: im2cc resume ${name}`)
+    console.log('─'.repeat(60))
   }
+}
+
+function cmdResume(): void {
+  const target = process.argv[3]
+  const bindings = listActiveBindings()
+
+  if (bindings.length === 0) {
+    console.log('没有活跃的绑定')
+    return
+  }
+
+  let binding
+  if (target) {
+    // 按项目名匹配
+    binding = bindings.find(b => path.basename(b.cwd).toLowerCase() === target.toLowerCase())
+      ?? bindings.find(b => path.basename(b.cwd).toLowerCase().includes(target.toLowerCase()))
+    if (!binding) {
+      console.log(`未找到项目 "${target}"`)
+      console.log('可用项目:')
+      for (const b of bindings) console.log(`  - ${path.basename(b.cwd)}`)
+      return
+    }
+  } else if (bindings.length === 1) {
+    binding = bindings[0]
+  } else {
+    console.log('多个活跃绑定，请指定项目名:')
+    for (const b of bindings) console.log(`  im2cc resume ${path.basename(b.cwd)}`)
+    return
+  }
+
+  const name = path.basename(binding.cwd)
+  console.log(`恢复 ${name} (${binding.sessionId})...`)
+  execSync(`claude --resume ${binding.sessionId}`, { stdio: 'inherit', cwd: binding.cwd })
 }
 
 async function cmdSetup(): Promise<void> {

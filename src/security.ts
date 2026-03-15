@@ -70,3 +70,36 @@ export function validatePath(rawPath: string, config: Im2ccConfig): PathValidati
 
   return { valid: true, resolvedPath: resolved }
 }
+
+/** 智能路径解析：短名称 → 在白名单目录下查找匹配的子目录 */
+export function resolvePath(rawPath: string, config: Im2ccConfig): string {
+  // 已经是绝对路径或 ~ 开头，直接返回
+  if (rawPath.startsWith('/') || rawPath.startsWith('~')) return rawPath
+
+  // 短名称模式：在白名单目录下查找
+  for (const prefix of config.pathWhitelist) {
+    const expanded = expandPath(prefix)
+    const candidate = path.join(expanded, rawPath)
+    if (fs.existsSync(candidate)) return candidate
+  }
+
+  // 找不到，原样返回让 validatePath 报错
+  return rawPath
+}
+
+/** 列出白名单目录下的所有项目目录 */
+export function listProjects(config: Im2ccConfig): string[] {
+  const projects: string[] = []
+  for (const prefix of config.pathWhitelist) {
+    const expanded = expandPath(prefix)
+    try {
+      const entries = fs.readdirSync(expanded, { withFileTypes: true })
+      for (const entry of entries) {
+        if (entry.isDirectory() && !entry.name.startsWith('.')) {
+          projects.push(entry.name)
+        }
+      }
+    } catch { /* 目录不存在 */ }
+  }
+  return projects.sort()
+}

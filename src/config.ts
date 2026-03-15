@@ -29,7 +29,7 @@ const DEFAULT_CONFIG: Im2ccConfig = {
   feishu: { appId: '', appSecret: '' },
   allowedUserIds: [],
   pathWhitelist: [path.join(os.homedir(), 'Code')],
-  defaultPermissionMode: 'plan',
+  defaultPermissionMode: 'YOLO',
   defaultTimeoutSeconds: 600,
 }
 

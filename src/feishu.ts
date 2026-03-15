@@ -73,7 +73,10 @@ export async function startFeishu(
           return
         }
 
-        if (!text.trim()) return
+        // 剥离 @mention 前缀 (飞书格式: @_user_1 或 @_all)
+        text = text.replace(/@_user_\d+\s*/g, '').trim()
+
+        if (!text) return
 
         await onMessage({ messageId, chatId, senderId, text: text.trim(), chatType })
       } catch (err) {

@@ -29,15 +29,17 @@ export function getClaudeVersion(): string {
   }
 }
 
-/** 创建新 session */
+/** 创建新 session，name 用于标记方便回到电脑后查找 */
 export async function createSession(
   cwd: string,
   permissionMode: string,
+  name?: string,
 ): Promise<CreateSessionResult> {
   const sessionId = crypto.randomUUID()
+  const extraFlags = name ? ['--name', `im2cc:${name}`] : []
   const output = await runClaude({
     message: '会话已建立。请回复"就绪"。',
-    sessionFlag: ['--session-id', sessionId],
+    sessionFlag: ['--session-id', sessionId, ...extraFlags],
     cwd,
     permissionMode,
   })
@@ -91,6 +93,12 @@ export async function interrupt(child: ChildProcess): Promise<void> {
 
 // --- 内部实现 ---
 
+/** 权限模式 → CLI 参数 */
+function permissionArgs(mode: string): string[] {
+  if (mode === 'YOLO') return ['--dangerously-skip-permissions']
+  return ['--permission-mode', mode]
+}
+
 interface RunClaudeOptions {
   message: string
   sessionFlag: string[]
@@ -106,7 +114,7 @@ function runClaude(opts: RunClaudeOptions): Promise<string> {
       ...opts.sessionFlag,
       '--output-format', 'stream-json',
       '--verbose',
-      '--permission-mode', opts.permissionMode,
+      ...permissionArgs(opts.permissionMode),
     ]
 
     const child = spawn('claude', args, {
