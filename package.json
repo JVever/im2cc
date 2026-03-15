@@ -1,0 +1,27 @@
+{
+  "name": "im2cc",
+  "version": "0.1.0",
+  "description": "IM to Claude Code — 通过飞书群聊远程操控本地 Claude Code CLI",
+  "type": "module",
+  "main": "dist/src/index.js",
+  "bin": {
+    "im2cc": "dist/bin/im2cc.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/src/index.js",
+    "lint": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.59.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^5.9.3"
+  }
+}

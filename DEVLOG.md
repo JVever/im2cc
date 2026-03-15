@@ -24,6 +24,7 @@
 | stream-json 完整性 | ✅ 需要 --verbose 标志 |
 
 ### 关键技术发现
+
 1. `stream-json` 必须配合 `--verbose` 使用
 2. `--session-id` 用于首次创建，`--resume` 用于后续（不能混用）
 3. session 文件存储在 `~/.claude/projects/<hash>/<session-id>.jsonl`
