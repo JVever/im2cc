@@ -164,28 +164,20 @@ function runClaude(opts: RunClaudeOptions): Promise<string> {
     const turnTexts: string[] = []   // 所有轮次的文字（用于 inflight 落盘）
     const resultParts: string[] = [] // result 事件（单轮 fallback）
 
-    /** 从 assistant 事件提取文字和工具名 */
-    function parseAssistant(event: Record<string, unknown>): { text: string; tools: string[] } {
+    /** 从 assistant 事件提取文字内容 */
+    function extractAssistantText(event: Record<string, unknown>): string {
       const msg = event.message as Record<string, unknown> | undefined
-      if (!msg || !Array.isArray(msg.content)) return { text: '', tools: [] }
+      if (!msg || !Array.isArray(msg.content)) return ''
       const texts: string[] = []
-      const tools: string[] = []
       for (const block of msg.content as Array<Record<string, unknown>>) {
         if (block.type === 'text' && typeof block.text === 'string') texts.push(block.text)
-        if (block.type === 'tool_use' && typeof block.name === 'string') tools.push(block.name)
       }
-      return { text: texts.join(''), tools }
+      return texts.join('')
     }
 
     function handleEvent(event: Record<string, unknown>): void {
       if (event.type === 'assistant') {
-        const { text, tools } = parseAssistant(event)
-        // 拼装本轮输出：文字 + 工具调用提示
-        let turnOutput = text
-        if (tools.length > 0) {
-          const toolHint = tools.map(t => `🔧 ${t}`).join('  ')
-          turnOutput = turnOutput ? `${turnOutput}\n\n${toolHint}` : toolHint
-        }
+        const turnOutput = extractAssistantText(event)
         if (turnOutput) {
           turnTexts.push(turnOutput)
           opts.onTurnText?.(turnOutput)  // 流式回调：立即发到飞书
