@@ -47,22 +47,29 @@ export async function createSession(
   return { sessionId, output }
 }
 
+export interface SendMessageOptions {
+  onSpawn?: (child: ChildProcess) => void
+  outputFile?: string
+  /** 每轮 assistant 文字就绪时立即回调（流式输出） */
+  onTurnText?: (text: string) => void
+}
+
 /** 向已有 session 发送消息 */
 export function sendMessage(
   sessionId: string,
   message: string,
   cwd: string,
   permissionMode: string,
-  onSpawn?: (child: ChildProcess) => void,
-  outputFile?: string,
+  opts?: SendMessageOptions,
 ): Promise<string> {
   return runClaude({
     message,
     sessionFlag: ['--resume', sessionId],
     cwd,
     permissionMode,
-    onSpawn,
-    outputFile,
+    onSpawn: opts?.onSpawn,
+    outputFile: opts?.outputFile,
+    onTurnText: opts?.onTurnText,
   })
 }
 
@@ -130,7 +137,8 @@ interface RunClaudeOptions {
   cwd: string
   permissionMode: string
   onSpawn?: (child: ChildProcess) => void
-  outputFile?: string  // 输出落盘路径，用于守护进程重启后恢复
+  outputFile?: string
+  onTurnText?: (text: string) => void
 }
 
 function runClaude(opts: RunClaudeOptions): Promise<string> {
@@ -153,51 +161,55 @@ function runClaude(opts: RunClaudeOptions): Promise<string> {
 
     let stdout = ''
     let stderr = ''
-    const turnTexts: string[] = []   // 每轮 assistant 的文字（多轮完整输出）
-    const resultParts: string[] = [] // result 事件（fallback）
+    const turnTexts: string[] = []   // 所有轮次的文字（用于 inflight 落盘）
+    const resultParts: string[] = [] // result 事件（单轮 fallback）
 
-    /** 从 assistant 事件中提取文字内容 */
-    function extractAssistantText(event: Record<string, unknown>): string {
+    /** 从 assistant 事件提取文字和工具名 */
+    function parseAssistant(event: Record<string, unknown>): { text: string; tools: string[] } {
       const msg = event.message as Record<string, unknown> | undefined
-      if (!msg || !Array.isArray(msg.content)) return ''
+      if (!msg || !Array.isArray(msg.content)) return { text: '', tools: [] }
       const texts: string[] = []
+      const tools: string[] = []
       for (const block of msg.content as Array<Record<string, unknown>>) {
-        if (block.type === 'text' && typeof block.text === 'string') {
-          texts.push(block.text)
+        if (block.type === 'text' && typeof block.text === 'string') texts.push(block.text)
+        if (block.type === 'tool_use' && typeof block.name === 'string') tools.push(block.name)
+      }
+      return { text: texts.join(''), tools }
+    }
+
+    function handleEvent(event: Record<string, unknown>): void {
+      if (event.type === 'assistant') {
+        const { text, tools } = parseAssistant(event)
+        // 拼装本轮输出：文字 + 工具调用提示
+        let turnOutput = text
+        if (tools.length > 0) {
+          const toolHint = tools.map(t => `🔧 ${t}`).join('  ')
+          turnOutput = turnOutput ? `${turnOutput}\n\n${toolHint}` : toolHint
+        }
+        if (turnOutput) {
+          turnTexts.push(turnOutput)
+          opts.onTurnText?.(turnOutput)  // 流式回调：立即发到飞书
         }
       }
-      return texts.join('')
+
+      if (event.type === 'result' && typeof event.result === 'string') {
+        resultParts.push(event.result)
+      }
+
+      // 输出落盘
+      const allText = turnTexts.length > 0 ? turnTexts.join('\n\n---\n\n') : resultParts.join('\n\n---\n\n')
+      if (opts.outputFile && allText) {
+        try { fs.writeFileSync(opts.outputFile, allText) } catch {}
+      }
     }
 
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString()
-      // 逐行解析 stream-json
       const lines = stdout.split('\n')
-      stdout = lines.pop() ?? '' // 保留不完整的最后一行
+      stdout = lines.pop() ?? ''
       for (const line of lines) {
         if (!line.trim()) continue
-        try {
-          const event = JSON.parse(line) as Record<string, unknown>
-
-          // 采集每轮 assistant 的文字（多轮对话的中间结果）
-          if (event.type === 'assistant') {
-            const text = extractAssistantText(event)
-            if (text) turnTexts.push(text)
-          }
-
-          // 采集 result 事件（最终结果，作为 fallback）
-          if (event.type === 'result' && typeof event.result === 'string') {
-            resultParts.push(event.result)
-          }
-
-          // 输出落盘
-          const currentOutput = turnTexts.length > 1 ? turnTexts.join('\n\n---\n\n') : resultParts.join('\n\n---\n\n')
-          if (opts.outputFile && currentOutput) {
-            try { fs.writeFileSync(opts.outputFile, currentOutput) } catch {}
-          }
-        } catch {
-          // 非 JSON 行，忽略
-        }
+        try { handleEvent(JSON.parse(line) as Record<string, unknown>) } catch {}
       }
     })
 
@@ -208,21 +220,11 @@ function runClaude(opts: RunClaudeOptions): Promise<string> {
     child.on('error', reject)
 
     child.on('close', (code) => {
-      // 处理 stdout 中残留的最后一行
       if (stdout.trim()) {
-        try {
-          const event = JSON.parse(stdout) as Record<string, unknown>
-          if (event.type === 'assistant') {
-            const text = extractAssistantText(event)
-            if (text) turnTexts.push(text)
-          }
-          if (event.type === 'result' && typeof event.result === 'string') {
-            resultParts.push(event.result)
-          }
-        } catch { /* 忽略 */ }
+        try { handleEvent(JSON.parse(stdout) as Record<string, unknown>) } catch {}
       }
 
-      // 多轮对话：用所有轮次的文字；单轮：用 result 事件
+      // 多轮用所有轮次文字，单轮用 result
       const resultText = turnTexts.length > 1
         ? turnTexts.join('\n\n---\n\n')
         : resultParts.join('\n\n---\n\n')

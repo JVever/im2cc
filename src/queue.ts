@@ -143,8 +143,9 @@ export function enqueue(
     processNext(groupId, sendReply, timeoutSeconds)
   }
 
-  // 结果回传飞书
-  promise.then(result => sendReply(result)).catch(err => sendReply(formatError(err)))
+  // 结果回传飞书（如果已经流式发送过了，result 为空，跳过）
+  promise.then(result => { if (result) sendReply(result).catch(() => {}) })
+    .catch(err => sendReply(formatError(err)))
 }
 
 /** 处理队列中的下一条消息 */
@@ -185,21 +186,30 @@ async function processNext(
     }
   }, timeoutSeconds * 1000)
 
+  let streamed = false
   try {
     const output = await sendMessage(
       binding.sessionId,
       msg.text,
       binding.cwd,
       binding.permissionMode,
-      (child) => {
-        group.currentChild = child
-        if (child.pid) updateInflightPid(inflight.id, child.pid)
+      {
+        onSpawn: (child) => {
+          group.currentChild = child
+          if (child.pid) updateInflightPid(inflight.id, child.pid)
+        },
+        outputFile,
+        onTurnText: (text) => {
+          // 每轮 assistant 文字就绪后立即发到飞书
+          streamed = true
+          sendReply(formatOutput(text, binding.sessionId)).catch(() => {})
+        },
       },
-      outputFile,
     )
 
     updateBinding(groupId, { turnCount: binding.turnCount + 1 })
-    msg.resolve(formatOutput(output, binding.sessionId))
+    // 如果已经流式发送过，不再重复发最终累积文本
+    msg.resolve(streamed ? '' : formatOutput(output, binding.sessionId))
   } catch (err) {
     msg.reject(err instanceof Error ? err : new Error(String(err)))
   } finally {
