@@ -5,14 +5,23 @@
  */
 
 import path from 'node:path'
+import { execSync } from 'node:child_process'
 import { loadConfig } from './config.js'
 import { isUserAllowed } from './security.js'
-import { isDuplicate, listActiveBindings, getBinding } from './session.js'
+import { isDuplicate, listActiveBindings, getBinding, archiveBinding } from './session.js'
 import { parseCommand, handleCommand } from './commands.js'
 import { enqueue } from './queue.js'
 import { startFeishu, sendTextMessage, type IncomingMessage } from './feishu.js'
-import { listRegistered } from './registry.js'
+import { listRegistered, lookup } from './registry.js'
 import { log, error } from './logger.js'
+
+/** 检查某个 session 是否正在被本地 tmux 使用 */
+function isSessionLocallyActive(sessionName: string): boolean {
+  try {
+    execSync(`tmux has-session -t "im2cc-${sessionName}" 2>/dev/null`)
+    return true
+  } catch { return false }
+}
 
 export async function startDaemon(): Promise<void> {
   log('im2cc 启动中...')
@@ -64,8 +73,18 @@ export async function startDaemon(): Promise<void> {
             lines.push(`  ${s.name} (${path.basename(s.cwd)})`)
           }
         }
-        lines.push('', '发 /fc <名称> 接入已有对话，或 /fn <名称> 新建')
+        lines.push('', '发 /fc <名称> 接入，或 /fn <名称> 新建')
         await sendTextMessage(chatId, lines.join('\n'))
+        return
+      }
+
+      // 独占检查：如果 session 正在电脑端 tmux 中使用，自动解绑飞书端
+      const regEntry = listRegistered().find(r => r.sessionId === binding.sessionId)
+      if (regEntry && isSessionLocallyActive(regEntry.name)) {
+        archiveBinding(chatId)
+        log(`[${chatId}] 检测到 "${regEntry.name}" 在电脑端活跃，自动解绑飞书`)
+        await sendTextMessage(chatId,
+          `⚠️ "${regEntry.name}" 正在电脑端使用，已自动断开飞书端。\n\n等电脑端关闭后，发 /fc ${regEntry.name} 重新接入。`)
         return
       }
 
