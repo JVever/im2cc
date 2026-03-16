@@ -5,6 +5,7 @@
  */
 
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { execSync } from 'node:child_process'
 import { loadConfig } from './config.js'
 import { isUserAllowed } from './security.js'
@@ -125,4 +126,13 @@ export async function startDaemon(): Promise<void> {
   }
 
   log(`im2cc 已启动，${activeBindings.length} 个活跃绑定`)
+}
+
+// 被 fork() 或 node 直接执行时，自动启动 daemon
+const __filename = fileURLToPath(import.meta.url)
+if (process.argv[1] === __filename) {
+  startDaemon().catch(e => {
+    error(`startDaemon 失败: ${e}`)
+    process.exit(1)
+  })
 }
