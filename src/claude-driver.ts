@@ -155,7 +155,7 @@ function runClaude(opts: RunClaudeOptions): Promise<string> {
 
     let stdout = ''
     let stderr = ''
-    let resultText = ''
+    const resultParts: string[] = []
 
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString()
@@ -167,7 +167,7 @@ function runClaude(opts: RunClaudeOptions): Promise<string> {
         try {
           const event = JSON.parse(line) as Record<string, unknown>
           if (event.type === 'result' && typeof event.result === 'string') {
-            resultText = event.result
+            resultParts.push(event.result)
           }
         } catch {
           // 非 JSON 行，忽略
@@ -187,11 +187,12 @@ function runClaude(opts: RunClaudeOptions): Promise<string> {
         try {
           const event = JSON.parse(stdout) as Record<string, unknown>
           if (event.type === 'result' && typeof event.result === 'string') {
-            resultText = event.result
+            resultParts.push(event.result)
           }
         } catch { /* 忽略 */ }
       }
 
+      const resultText = resultParts.join('\n\n---\n\n')
       if (code === 0 || resultText) {
         resolve(resultText || '(无输出)')
       } else {
