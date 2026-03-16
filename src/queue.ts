@@ -79,7 +79,7 @@ async function processNext(
 
   const binding = getBinding(groupId)
   if (!binding) {
-    msg.reject(new Error('该群未绑定 Claude Code session，请先 /bind <路径>'))
+    msg.reject(new Error('该群未接入对话，请先 /fc <名称> 或 /fn <名称>'))
     processNext(groupId, sendReply, timeoutSeconds)
     return
   }
