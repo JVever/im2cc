@@ -15,6 +15,7 @@
 - 电脑和飞书之间自由流转对话，上下文完全一致
 - 同一个对话永远只在一个地方活跃（独占访问）
 - 统一的命令系统（fn/fc/fl/fk/fd/fs），电脑和飞书完全一致
+- 飞书发送文件/图片，自动暂存到项目 inbox，与下一条指令合并发送给 Claude
 
 ## 快速开始
 
@@ -122,6 +123,7 @@ im2cc/
 │   ├── commands.ts        # 统一命令系统（fn/fc/fl/fk/fd/fs）
 │   ├── output.ts          # CLI 输出 → 飞书消息格式化
 │   ├── feishu.ts          # 飞书 WebSocket 适配器
+│   ├── file-staging.ts    # 文件暂存管理（inbox/校验/TTL清理）
 │   └── logger.ts          # 日志 + 轮转
 ├── bin/
 │   └── im2cc.ts           # Node.js CLI (start/stop/setup/doctor/...)
@@ -151,5 +153,6 @@ im2cc/
 | im:message:send_as_bot | 以 Bot 身份发消息 |
 | im:message.group_msg:readonly | 接收群内所有消息（无需 @） |
 | im:message.group_at_msg:readonly | 接收 @Bot 消息 |
+| im:resource | 下载消息中的文件/图片资源 |
 
 事件订阅：`im.message.receive_v1`（使用 WebSocket 长连接模式）

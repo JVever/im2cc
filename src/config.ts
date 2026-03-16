@@ -18,6 +18,8 @@ export interface Im2ccConfig {
   defaultPermissionMode: string // plan | auto | default | auto-edit
   defaultTimeoutSeconds: number // 默认 600 (10分钟)
   recapBudget: number           // /fc 时上下文回顾的字符预算，0 = 禁用
+  maxFileSizeMB: number         // 文件传输最大体积，默认 10
+  inboxTtlMinutes: number       // inbox 文件过期时间，默认 60
 }
 
 const CONFIG_DIR = path.join(os.homedir(), '.im2cc')
@@ -35,6 +37,8 @@ const DEFAULT_CONFIG: Im2ccConfig = {
   defaultPermissionMode: 'YOLO',
   defaultTimeoutSeconds: 600,
   recapBudget: 2000,
+  maxFileSizeMB: 10,
+  inboxTtlMinutes: 60,
 }
 
 function ensureDirs(): void {

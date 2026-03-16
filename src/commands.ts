@@ -352,5 +352,7 @@ function handleHelp(): string {
     '/stop              — 中断当前执行',
     '',
     '直接发消息即转给 Claude Code',
+    '',
+    '发送图片或文件，再发指令即可让 Claude 分析',
   ].join('\n')
 }
