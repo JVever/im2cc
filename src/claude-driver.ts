@@ -153,7 +153,21 @@ function runClaude(opts: RunClaudeOptions): Promise<string> {
 
     let stdout = ''
     let stderr = ''
-    const resultParts: string[] = []
+    const turnTexts: string[] = []   // 每轮 assistant 的文字（多轮完整输出）
+    const resultParts: string[] = [] // result 事件（fallback）
+
+    /** 从 assistant 事件中提取文字内容 */
+    function extractAssistantText(event: Record<string, unknown>): string {
+      const msg = event.message as Record<string, unknown> | undefined
+      if (!msg || !Array.isArray(msg.content)) return ''
+      const texts: string[] = []
+      for (const block of msg.content as Array<Record<string, unknown>>) {
+        if (block.type === 'text' && typeof block.text === 'string') {
+          texts.push(block.text)
+        }
+      }
+      return texts.join('')
+    }
 
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString()
@@ -164,12 +178,22 @@ function runClaude(opts: RunClaudeOptions): Promise<string> {
         if (!line.trim()) continue
         try {
           const event = JSON.parse(line) as Record<string, unknown>
+
+          // 采集每轮 assistant 的文字（多轮对话的中间结果）
+          if (event.type === 'assistant') {
+            const text = extractAssistantText(event)
+            if (text) turnTexts.push(text)
+          }
+
+          // 采集 result 事件（最终结果，作为 fallback）
           if (event.type === 'result' && typeof event.result === 'string') {
             resultParts.push(event.result)
-            // 输出落盘：每收到一个 result 就写入文件，确保重启后可恢复
-            if (opts.outputFile) {
-              try { fs.writeFileSync(opts.outputFile, resultParts.join('\n\n---\n\n')) } catch {}
-            }
+          }
+
+          // 输出落盘
+          const currentOutput = turnTexts.length > 1 ? turnTexts.join('\n\n---\n\n') : resultParts.join('\n\n---\n\n')
+          if (opts.outputFile && currentOutput) {
+            try { fs.writeFileSync(opts.outputFile, currentOutput) } catch {}
           }
         } catch {
           // 非 JSON 行，忽略
@@ -188,13 +212,20 @@ function runClaude(opts: RunClaudeOptions): Promise<string> {
       if (stdout.trim()) {
         try {
           const event = JSON.parse(stdout) as Record<string, unknown>
+          if (event.type === 'assistant') {
+            const text = extractAssistantText(event)
+            if (text) turnTexts.push(text)
+          }
           if (event.type === 'result' && typeof event.result === 'string') {
             resultParts.push(event.result)
           }
         } catch { /* 忽略 */ }
       }
 
-      const resultText = resultParts.join('\n\n---\n\n')
+      // 多轮对话：用所有轮次的文字；单轮：用 result 事件
+      const resultText = turnTexts.length > 1
+        ? turnTexts.join('\n\n---\n\n')
+        : resultParts.join('\n\n---\n\n')
       if (code === 0 || resultText) {
         resolve(resultText || '(无输出)')
       } else {
