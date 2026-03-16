@@ -4,12 +4,14 @@
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
+import path from 'node:path'
 import { loadConfig } from './config.js'
 import { isUserAllowed } from './security.js'
 import { isDuplicate, listActiveBindings, getBinding } from './session.js'
 import { parseCommand, handleCommand } from './commands.js'
 import { enqueue } from './queue.js'
 import { startFeishu, sendTextMessage, type IncomingMessage } from './feishu.js'
+import { listRegistered } from './registry.js'
 import { log, error } from './logger.js'
 
 export async function startDaemon(): Promise<void> {
@@ -54,7 +56,16 @@ export async function startDaemon(): Promise<void> {
       // 普通消息：入队列发给 Claude
       const binding = getBinding(chatId)
       if (!binding) {
-        await sendTextMessage(chatId, '该群未绑定 Claude Code session，请先发送 /bind <项目路径>')
+        const registered = listRegistered()
+        const lines = ['当前未接入任何对话。']
+        if (registered.length > 0) {
+          lines.push('', '📋 可用对话:')
+          for (const s of registered.slice(0, 5)) {
+            lines.push(`  ${s.name} (${path.basename(s.cwd)})`)
+          }
+        }
+        lines.push('', '发 /fc <名称> 接入已有对话，或 /fn <名称> 新建')
+        await sendTextMessage(chatId, lines.join('\n'))
         return
       }
 

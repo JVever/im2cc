@@ -57,12 +57,12 @@ async function handleFn(args: string, groupId: string, config: Im2ccConfig): Pro
     const projects = listProjects(config)
     if (projects.length === 0) return `${config.pathWhitelist.join(', ')} 下没有找到项目目录`
     const list = projects.map((p, i) => `  ${i + 1}. ${p}`).join('\n')
-    return `📁 可用项目:\n${list}\n\n用法: /bind <对话名称> [项目名]\n例如: /bind auth-refactor im2cc`
+    return `📁 可用项目:\n${list}\n\n用法: /fn <对话名称> [项目名]\n例如: /fn auth-refactor im2cc`
   }
 
   const existing = getBinding(groupId)
   if (existing) {
-    return `该群已连接到 "${path.basename(existing.cwd)}"\n先 /unbind 再操作`
+    return `该群已连接到 "${path.basename(existing.cwd)}"\n先 /fd 再操作`
   }
 
   const parts = args.split(/\s+/)
@@ -100,7 +100,7 @@ async function handleFn(args: string, groupId: string, config: Im2ccConfig): Pro
 async function handleFc(args: string, groupId: string, config: Im2ccConfig): Promise<string> {
   const existing = getBinding(groupId)
   if (existing) {
-    return `该群已连接，先 /unbind 再 /attach`
+    return `该群已连接，先 /fd 再 /fc`
   }
 
   // 无参数：列出注册表 + 最近发现的对话
@@ -132,7 +132,7 @@ async function handleFc(args: string, groupId: string, config: Im2ccConfig): Pro
 
     if (lines.length === 0) return '没有可用的对话'
 
-    lines.push('发 /attach <名称> 接入')
+    lines.push('发 /fc <名称> 接入')
     return lines.join('\n')
   }
 
@@ -189,7 +189,7 @@ async function handleFc(args: string, groupId: string, config: Im2ccConfig): Pro
     return `多个对话匹配:\n${list}\n\n请用更精确的名称`
   }
 
-  return `未找到 "${args}"\n发 /attach 查看所有可用对话`
+  return `未找到 "${args}"\n发 /fc 查看所有可用对话`
 }
 
 function handleFd(groupId: string): string {
@@ -229,7 +229,7 @@ function handleMode(args: string, groupId: string): string {
   }
 
   const binding = getBinding(groupId)
-  if (!binding) return '该群未绑定，请先 /bind'
+  if (!binding) return '该群未绑定，请先 /fc 或 /fn'
 
   updateBinding(groupId, { permissionMode: normalized })
   return `⚙️ 模式已切换为 ${normalized}（下一条消息生效）`
@@ -289,7 +289,7 @@ async function handleFnNew(args: string, groupId: string, config: Im2ccConfig): 
     const binding = createBinding(groupId, sessionId, validation.resolvedPath, config.defaultPermissionMode, cliVersion)
 
     const lines = ['✅ 新对话已创建']
-    if (old) lines.push(`旧对话仍可通过 /attach 恢复`)
+    if (old) lines.push(`旧对话仍可通过 /fc 恢复`)
     lines.push(
       `📛 ${sessionName}`,
       `📁 ${path.basename(validation.resolvedPath)}`,
