@@ -4,10 +4,11 @@
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
+import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execSync } from 'node:child_process'
-import { loadConfig } from './config.js'
+import { loadConfig, getPidFile } from './config.js'
 import { isUserAllowed } from './security.js'
 import { isDuplicate, listActiveBindings, getBinding, archiveBinding } from './session.js'
 import { parseCommand, handleCommand } from './commands.js'
@@ -25,7 +26,42 @@ function isSessionLocallyActive(sessionName: string): boolean {
   } catch { return false }
 }
 
+/** 单实例保护：确保只有一个守护进程在运行 */
+function acquireLock(): boolean {
+  const pidFile = getPidFile()
+
+  if (fs.existsSync(pidFile)) {
+    const existingPid = parseInt(fs.readFileSync(pidFile, 'utf-8').trim())
+    if (!isNaN(existingPid)) {
+      try {
+        process.kill(existingPid, 0) // 检查进程是否存活
+        error(`另一个 im2cc 守护进程已在运行 (PID: ${existingPid})，本次启动终止`)
+        return false
+      } catch {
+        log(`清理过期 PID 文件 (旧 PID: ${existingPid})`)
+      }
+    }
+  }
+
+  // 写入自己的 PID
+  fs.writeFileSync(pidFile, String(process.pid))
+
+  // 退出时清理 PID 文件
+  const cleanup = () => {
+    try { if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile) } catch {}
+  }
+  process.on('exit', cleanup)
+  process.on('SIGTERM', () => { cleanup(); process.exit(0) })
+  process.on('SIGINT', () => { cleanup(); process.exit(0) })
+
+  return true
+}
+
 export async function startDaemon(): Promise<void> {
+  if (!acquireLock()) {
+    process.exit(1)
+  }
+
   log('im2cc 启动中...')
 
   const config = loadConfig()

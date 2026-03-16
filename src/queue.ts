@@ -97,13 +97,13 @@ async function processNext(
   }, timeoutSeconds * 1000)
 
   try {
-    const { output, childProcess } = await sendMessage(
+    const output = await sendMessage(
       binding.sessionId,
       msg.text,
       binding.cwd,
       binding.permissionMode,
+      (child) => { group.currentChild = child },
     )
-    group.currentChild = childProcess
 
     updateBinding(groupId, { turnCount: binding.turnCount + 1 })
     msg.resolve(formatOutput(output, binding.sessionId))

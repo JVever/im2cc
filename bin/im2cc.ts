@@ -77,7 +77,7 @@ async function cmdStart(): Promise<void> {
   child.unref()
 
   if (child.pid) {
-    fs.writeFileSync(pidFile, String(child.pid))
+    // PID 文件由 startDaemon() 内部的 acquireLock() 管理
     console.log(`✅ 守护进程已启动 (PID: ${child.pid})`)
     console.log(`   日志: im2cc logs`)
   }

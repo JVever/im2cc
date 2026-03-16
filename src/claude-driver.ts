@@ -47,26 +47,20 @@ export async function createSession(
 }
 
 /** 向已有 session 发送消息 */
-export async function sendMessage(
+export function sendMessage(
   sessionId: string,
   message: string,
   cwd: string,
   permissionMode: string,
-): Promise<{ output: string; childProcess: ChildProcess }> {
-  let resolveChild: (cp: ChildProcess) => void
-  const childPromise = new Promise<ChildProcess>(r => { resolveChild = r })
-
-  const outputPromise = runClaude({
+  onSpawn?: (child: ChildProcess) => void,
+): Promise<string> {
+  return runClaude({
     message,
     sessionFlag: ['--resume', sessionId],
     cwd,
     permissionMode,
-    onSpawn: cp => resolveChild!(cp),
+    onSpawn,
   })
-
-  const child = await childPromise
-  const output = await outputPromise
-  return { output, childProcess: child }
 }
 
 /** 杀掉本地占用某个 session 的 Claude Code 进程 */
