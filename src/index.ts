@@ -1,6 +1,6 @@
 /**
- * @input:    Im2ccConfig, 飞书 WebSocket 事件, Claude Code CLI
- * @output:   startDaemon() — 主入口：初始化各模块、启动飞书连接、消息路由
+ * @input:    Im2ccConfig, 飞书 WebSocket 事件, Claude Code CLI, recap (session JSONL)
+ * @output:   startDaemon() — 主入口：初始化各模块、启动飞书连接、消息路由、/fc 上下文回顾
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -13,6 +13,7 @@ import { parseCommand, handleCommand } from './commands.js'
 import { enqueue } from './queue.js'
 import { startFeishu, sendTextMessage, type IncomingMessage } from './feishu.js'
 import { listRegistered, lookup } from './registry.js'
+import { buildRecap } from './recap.js'
 import { log, error } from './logger.js'
 
 /** 检查某个 session 是否正在被本地 tmux 使用 */
@@ -57,6 +58,19 @@ export async function startDaemon(): Promise<void> {
       try {
         const reply = await handleCommand(cmd, chatId, config)
         await sendTextMessage(chatId, reply)
+
+        // /fc 成功接入后，自动发送上下文回顾
+        if (cmd.command === 'fc' && cmd.args && config.recapBudget > 0) {
+          const binding = getBinding(chatId)
+          if (binding) {
+            try {
+              const recap = buildRecap(binding.sessionId, binding.cwd, config.recapBudget)
+              if (recap) await sendTextMessage(chatId, recap)
+            } catch (err) {
+              log(`[recap] 生成失败: ${err}`)
+            }
+          }
+        }
       } catch (err) {
         error(`命令执行失败 [${chatId}] /${cmd.command}: ${err}`)
         await sendTextMessage(chatId, `❌ 命令执行失败: ${err instanceof Error ? err.message : String(err)}`)

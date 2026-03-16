@@ -15,4 +15,5 @@ im2cc 核心业务逻辑：飞书消息接收 → 命令路由 → Claude Code C
 - output.ts：stream-json 事件 → 飞书消息文本格式化
 - registry.ts：命名 session 注册表（register/lookup/list/remove，永久寻址）
 - discover.ts：扫描本地 Claude Code 对话（session 发现、slug→路径反推，作为注册表的补充）
+- recap.ts：上下文回顾（读取 session JSONL 提取最近对话，/fc 时自动发送）
 - feishu.ts：飞书 WebSocket 适配器（连接、收消息、发消息）

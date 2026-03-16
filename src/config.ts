@@ -17,6 +17,7 @@ export interface Im2ccConfig {
   pathWhitelist: string[]     // 允许绑定的目录前缀，默认 ['~/Code/']
   defaultPermissionMode: string // plan | auto | default | auto-edit
   defaultTimeoutSeconds: number // 默认 600 (10分钟)
+  recapBudget: number           // /fc 时上下文回顾的字符预算，0 = 禁用
 }
 
 const CONFIG_DIR = path.join(os.homedir(), '.im2cc')
@@ -31,6 +32,7 @@ const DEFAULT_CONFIG: Im2ccConfig = {
   pathWhitelist: [path.join(os.homedir(), 'Code')],
   defaultPermissionMode: 'YOLO',
   defaultTimeoutSeconds: 600,
+  recapBudget: 2000,
 }
 
 function ensureDirs(): void {

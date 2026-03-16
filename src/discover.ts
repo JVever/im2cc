@@ -1,6 +1,6 @@
 /**
  * @input:    ~/.claude/projects/ 下的 session JSONL 文件
- * @output:   discoverSessions() — 扫描本地 Claude Code 对话列表
+ * @output:   discoverSessions(), pathToSlug() — 扫描本地 Claude Code 对话列表 + 路径转 slug
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -38,7 +38,7 @@ function slugToPath(slug: string): string | null {
   return findMatchingPath(home, slug)
 }
 
-function pathToSlug(p: string): string {
+export function pathToSlug(p: string): string {
   return p.replace(/\//g, '-').replace(/[^\x00-\x7F]/g, '-')
 }
 
