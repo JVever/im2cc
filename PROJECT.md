@@ -68,7 +68,7 @@ fk myproject
 
 | 命令 | 作用 |
 |------|------|
-| `/mode <YOLO\|plan\|default\|auto-edit>` | 切换权限模式 |
+| `/mode <YOLO\|default\|auto-edit>` | 切换权限模式 |
 | `/stop` | 中断正在执行的任务 |
 | `/help` | 显示帮助 |
 

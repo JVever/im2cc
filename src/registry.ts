@@ -12,6 +12,7 @@ export interface RegisteredSession {
   name: string
   sessionId: string
   cwd: string
+  permissionMode?: string
   createdAt: string
   lastUsedAt: string
 }
@@ -93,6 +94,14 @@ export function touch(name: string): void {
     reg[name].lastUsedAt = new Date().toISOString()
     writeRegistry(reg)
   }
+}
+
+/** 更新 registry 中某个 session 的字段 */
+export function updateRegistry(name: string, updates: Partial<Pick<RegisteredSession, 'permissionMode'>>): void {
+  const reg = readRegistry()
+  if (!reg[name]) return
+  Object.assign(reg[name], updates)
+  writeRegistry(reg)
 }
 
 /** 删除 */

@@ -11,7 +11,7 @@ import { createBinding, getBinding, archiveBinding, updateBinding } from './sess
 import { createSession, getClaudeVersion, killLocalSession } from './claude-driver.js'
 import { handleStop, getQueueStatus } from './queue.js'
 import { discoverSessions, findSession } from './discover.js'
-import { register, lookup, search, listRegistered, touch, remove } from './registry.js'
+import { register, lookup, search, listRegistered, touch, remove, updateRegistry } from './registry.js'
 import { log } from './logger.js'
 
 export interface ParsedCommand {
@@ -143,14 +143,19 @@ async function handleFc(args: string, groupId: string, config: Im2ccConfig): Pro
     const killed = killLocalSession(reg.name)
     const cliVersion = getClaudeVersion()
     touch(reg.name)
-    const binding = createBinding(groupId, reg.sessionId, reg.cwd, config.defaultPermissionMode, cliVersion)
+    const mode = reg.permissionMode ?? config.defaultPermissionMode
+    const binding = createBinding(groupId, reg.sessionId, reg.cwd, mode, cliVersion)
     log(`[${groupId}] attach → "${reg.name}" (${reg.sessionId})${killed ? ' [已关闭本地进程]' : ''}`)
+
+    const modeWarning = binding.permissionMode === 'YOLO'
+      ? '⚠️ 当前为 YOLO 模式（自动执行所有操作）\n   切换: /mode default'
+      : `⚙️ 模式: ${binding.permissionMode}`
 
     return [
       `✅ 已接入 "${reg.name}"`,
       killed ? '🔄 已关闭电脑端的对话' : '',
       `📁 ${path.basename(reg.cwd)}`,
-      `⚙️ 模式: ${binding.permissionMode}`,
+      modeWarning,
       '',
       `回到电脑: im2cc open ${reg.name}`,
     ].filter(Boolean).join('\n')
@@ -173,10 +178,14 @@ async function handleFc(args: string, groupId: string, config: Im2ccConfig): Pro
     register(args, s.sessionId, s.projectPath)
     log(`[${groupId}] attach (discovered) → "${args}" (${s.sessionId})`)
 
+    const modeWarning2 = binding.permissionMode === 'YOLO'
+      ? '⚠️ 当前为 YOLO 模式（自动执行所有操作）\n   切换: /mode default'
+      : `⚙️ 模式: ${binding.permissionMode}`
+
     return [
       `✅ 已接入 "${s.name || args}"`,
       `📁 ${s.projectName}`,
-      `⚙️ 模式: ${binding.permissionMode}`,
+      modeWarning2,
       '',
       `回到电脑: im2cc open ${args}`,
     ].join('\n')
@@ -203,9 +212,10 @@ function handleFd(groupId: string): string {
   ].join('\n')
 }
 
+// plan 模式不适合飞书端：-p 非交互模式下 Claude 无法提问/获取反馈，
+// 需要规划时用自然语言让 Claude "先计划后执行" 更可靠
 const MODE_MAP: Record<string, string> = {
   'yolo': 'YOLO',
-  'plan': 'plan',
   'default': 'default',
   'auto-edit': 'auto-edit',
 }
@@ -213,7 +223,6 @@ const MODE_MAP: Record<string, string> = {
 // YOLO 模式映射到 Claude CLI 的实际参数
 export const MODE_TO_CLI: Record<string, string> = {
   'YOLO': 'dangerouslySkipPermissions',
-  'plan': 'plan',
   'default': 'default',
   'auto-edit': 'acceptEdits',
 }
@@ -223,15 +232,22 @@ function handleMode(args: string, groupId: string): string {
   if (!args || !normalized) {
     return '用法: /mode <模式>\n\n' +
       '  YOLO — 自动执行所有操作（默认）\n' +
-      '  plan — 只分析不执行（最安全）\n' +
       '  default — 需要确认才执行\n' +
-      '  auto-edit — 自动编辑，其他需确认'
+      '  auto-edit — 自动编辑，其他需确认\n\n' +
+      '💡 需要 Claude 先规划再执行？直接说"先给我计划，确认后再做"'
   }
 
   const binding = getBinding(groupId)
   if (!binding) return '该群未绑定，请先 /fc 或 /fn'
 
   updateBinding(groupId, { permissionMode: normalized })
+
+  // 同步更新 registry，下次 /fc 接入时记住此模式
+  const regEntry = listRegistered().find(r => r.sessionId === binding.sessionId)
+  if (regEntry) {
+    updateRegistry(regEntry.name, { permissionMode: normalized })
+  }
+
   return `⚙️ 模式已切换为 ${normalized}（下一条消息生效）`
 }
 
@@ -332,7 +348,7 @@ function handleHelp(): string {
     '/fd                — 断开当前对话',
     '/fs                — 查看当前状态',
     '',
-    '/mode <模式>       — 切换模式 (YOLO|plan|default|auto-edit)',
+    '/mode <模式>       — 切换模式 (YOLO|default|auto-edit)',
     '/stop              — 中断当前执行',
     '',
     '直接发消息即转给 Claude Code',
