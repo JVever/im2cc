@@ -92,13 +92,19 @@ function cmdStop(): void {
     return
   }
 
+  // 提示活跃绑定状态
+  const bindings = listActiveBindings()
+  if (bindings.length > 0) {
+    console.log(`⚠️ 当前有 ${bindings.length} 个活跃绑定，执行中的任务结果将在下次启动时恢复`)
+  }
+
   const pid = parseInt(fs.readFileSync(pidFile, 'utf-8').trim())
   try {
     process.kill(pid, 'SIGTERM')
-    fs.unlinkSync(pidFile)
+    // PID 文件由 startDaemon() 的 cleanup handler 负责删除
     console.log(`✅ 守护进程已停止 (PID: ${pid})`)
   } catch {
-    fs.unlinkSync(pidFile)
+    try { fs.unlinkSync(pidFile) } catch {}
     console.log('守护进程已不存在，已清理 PID 文件')
   }
 }

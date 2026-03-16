@@ -25,6 +25,8 @@ const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json')
 const DATA_DIR = path.join(CONFIG_DIR, 'data')
 const LOG_DIR = path.join(CONFIG_DIR, 'logs')
 const PID_FILE = path.join(CONFIG_DIR, 'daemon.pid')
+const INFLIGHT_DIR = path.join(DATA_DIR, 'inflight')
+const PENDING_FILE = path.join(DATA_DIR, 'pending.json')
 
 const DEFAULT_CONFIG: Im2ccConfig = {
   feishu: { appId: '', appSecret: '' },
@@ -69,3 +71,8 @@ export function getDataDir(): string { ensureDirs(); return DATA_DIR }
 export function getLogDir(): string { ensureDirs(); return LOG_DIR }
 export function getPidFile(): string { ensureDirs(); return PID_FILE }
 export function getConfigDir(): string { ensureDirs(); return CONFIG_DIR }
+export function getInflightDir(): string {
+  if (!fs.existsSync(INFLIGHT_DIR)) fs.mkdirSync(INFLIGHT_DIR, { recursive: true })
+  return INFLIGHT_DIR
+}
+export function getPendingFile(): string { ensureDirs(); return PENDING_FILE }

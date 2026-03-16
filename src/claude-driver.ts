@@ -4,6 +4,7 @@
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
+import fs from 'node:fs'
 import { spawn, execSync, type ChildProcess } from 'node:child_process'
 import crypto from 'node:crypto'
 
@@ -53,6 +54,7 @@ export function sendMessage(
   cwd: string,
   permissionMode: string,
   onSpawn?: (child: ChildProcess) => void,
+  outputFile?: string,
 ): Promise<string> {
   return runClaude({
     message,
@@ -60,6 +62,7 @@ export function sendMessage(
     cwd,
     permissionMode,
     onSpawn,
+    outputFile,
   })
 }
 
@@ -127,6 +130,7 @@ interface RunClaudeOptions {
   cwd: string
   permissionMode: string
   onSpawn?: (child: ChildProcess) => void
+  outputFile?: string  // 输出落盘路径，用于守护进程重启后恢复
 }
 
 function runClaude(opts: RunClaudeOptions): Promise<string> {
@@ -162,6 +166,10 @@ function runClaude(opts: RunClaudeOptions): Promise<string> {
           const event = JSON.parse(line) as Record<string, unknown>
           if (event.type === 'result' && typeof event.result === 'string') {
             resultParts.push(event.result)
+            // 输出落盘：每收到一个 result 就写入文件，确保重启后可恢复
+            if (opts.outputFile) {
+              try { fs.writeFileSync(opts.outputFile, resultParts.join('\n\n---\n\n')) } catch {}
+            }
           }
         } catch {
           // 非 JSON 行，忽略

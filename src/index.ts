@@ -12,7 +12,7 @@ import { loadConfig, getPidFile } from './config.js'
 import { isUserAllowed } from './security.js'
 import { isDuplicate, listActiveBindings, getBinding, archiveBinding } from './session.js'
 import { parseCommand, handleCommand } from './commands.js'
-import { enqueue } from './queue.js'
+import { enqueue, recoverOnStartup } from './queue.js'
 import { startFeishu, sendTextMessage, type IncomingMessage } from './feishu.js'
 import { listRegistered, lookup } from './registry.js'
 import { buildRecap } from './recap.js'
@@ -150,6 +150,13 @@ export async function startDaemon(): Promise<void> {
 
   // 启动飞书连接
   await startFeishu(config, handleMessage)
+
+  // 恢复上次中断的任务和排队消息
+  await recoverOnStartup(
+    (groupId, text) => sendTextMessage(groupId, text),
+    (groupId) => (text: string) => sendTextMessage(groupId, text),
+    config.defaultTimeoutSeconds,
+  )
 
   // 发送重启通知
   for (const binding of activeBindings) {
