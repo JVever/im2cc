@@ -1,6 +1,6 @@
 /**
  * @input:    飞书 App 凭证, im.message.receive_v1 事件
- * @output:   startFeishu(), sendTextMessage(), downloadResource() — 飞书 WebSocket 连接、消息收发、资源下载
+ * @output:   startFeishu(), sendTextMessage(), downloadResource() — 飞书 WebSocket 连接、消息收发、资源下载、连接健康检测
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -34,6 +34,25 @@ export type MessageHandler = (msg: IncomingMessage) => Promise<void>
 
 let client: lark.Client | null = null
 
+// --- 连接健康检测 ---
+const HEALTH_CHECK_INTERVAL = 2 * 60 * 1000  // 2 分钟
+const MAX_CONSECUTIVE_FAILURES = 3
+
+let lastMessageAt = Date.now()
+let consecutiveFailures = 0
+let healthCheckTimer: NodeJS.Timeout | null = null
+
+/** 通过轻量 API 调用验证连接是否存活 */
+async function checkHealth(): Promise<boolean> {
+  if (!client) return false
+  try {
+    await client.request({ method: 'GET', url: '/open-apis/bot/v3/info/' })
+    return true
+  } catch {
+    return false
+  }
+}
+
 export async function startFeishu(
   config: Im2ccConfig,
   onMessage: MessageHandler,
@@ -59,6 +78,9 @@ export async function startFeishu(
   const dispatcher = new lark.EventDispatcher({}).register({
     'im.message.receive_v1': async (data) => {
       try {
+        lastMessageAt = Date.now()
+        consecutiveFailures = 0  // 收到消息说明连接正常
+
         const event = data as Record<string, unknown>
         const sender = event.sender as Record<string, unknown> | undefined
         const message = event.message as Record<string, unknown> | undefined
@@ -113,14 +135,48 @@ export async function startFeishu(
     },
   })
 
-  const wsClient = new lark.WSClient({
-    appId,
-    appSecret,
-  })
+  let wsClient: lark.WSClient | null = null
 
-  log('正在连接飞书 WebSocket...')
-  await wsClient.start({ eventDispatcher: dispatcher })
-  log('飞书 WebSocket 已连接')
+  /** 创建并启动 WSClient */
+  async function connect(): Promise<void> {
+    if (wsClient) {
+      try { wsClient.close({ force: true }) } catch {}
+    }
+    wsClient = new lark.WSClient({ appId, appSecret })
+    log('正在连接飞书 WebSocket...')
+    await wsClient.start({ eventDispatcher: dispatcher })
+    lastMessageAt = Date.now()
+    consecutiveFailures = 0
+    log('飞书 WebSocket 已连接')
+  }
+
+  await connect()
+
+  // 健康检测循环
+  healthCheckTimer = setInterval(async () => {
+    const healthy = await checkHealth()
+    if (healthy) {
+      if (consecutiveFailures > 0) {
+        log(`[health] 连接已恢复 (之前连续失败 ${consecutiveFailures} 次)`)
+      }
+      consecutiveFailures = 0
+      return
+    }
+
+    consecutiveFailures++
+    const silentMinutes = Math.floor((Date.now() - lastMessageAt) / 60000)
+    log(`[health] API 调用失败 (连续第 ${consecutiveFailures} 次，距上次收消息 ${silentMinutes} 分钟)`)
+
+    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+      error(`[health] 连续 ${MAX_CONSECUTIVE_FAILURES} 次健康检查失败，强制重连 WebSocket`)
+      consecutiveFailures = 0
+      try {
+        await connect()
+      } catch (err) {
+        error(`[health] 重连失败: ${err}`)
+      }
+    }
+  }, HEALTH_CHECK_INTERVAL)
 }
 
 export async function sendTextMessage(chatId: string, text: string): Promise<void> {
