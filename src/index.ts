@@ -1,6 +1,6 @@
 /**
- * @input:    Im2ccConfig, 飞书 WebSocket 事件, Claude Code CLI, recap, file-staging
- * @output:   startDaemon() — 主入口：初始化各模块、启动飞书连接、消息路由、/fc 上下文回顾、文件暂存与合并
+ * @input:    Im2ccConfig, 飞书 REST 轮询消息, Claude Code CLI, recap, file-staging
+ * @output:   startDaemon() — 主入口：初始化各模块、启动飞书轮询、消息路由、/fc 上下文回顾、文件暂存与合并
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 

@@ -76,15 +76,16 @@ fk myproject
 ## 工作原理
 
 ```
-┌──────────┐    WebSocket    ┌──────────────┐    spawn     ┌─────────────┐
+┌──────────┐   REST 轮询    ┌──────────────┐    spawn     ┌─────────────┐
 │ 飞书群聊  │ ◄────────────► │ im2cc 守护进程 │ ──────────► │ Claude Code  │
 │ (手机/PC) │                │ (本地运行)     │             │ CLI          │
 └──────────┘                └──────────────┘             └─────────────┘
                                     │
                                     ▼
                              ~/.im2cc/data/
-                             ├── registry.json  (命名对话注册表)
-                             └── bindings.json  (飞书群↔session 绑定)
+                             ├── registry.json      (命名对话注册表)
+                             ├── bindings.json      (飞书群↔session 绑定)
+                             └── poll-cursors.json  (轮询游标)
 ```
 
 **关键设计**：不使用 Agent SDK，直接调用 `claude -p --resume <session-id>`。
@@ -101,7 +102,7 @@ fk myproject
 |------|------|
 | 语言 | TypeScript |
 | 运行时 | Node.js >= 20 |
-| 飞书连接 | @larksuiteoapi/node-sdk (WebSocket 长连接) |
+| 飞书连接 | @larksuiteoapi/node-sdk (REST 轮询) |
 | CLI 调用 | child_process.spawn |
 | 本地会话 | tmux |
 | 存储 | JSON 文件 (原子写) |
@@ -122,7 +123,8 @@ im2cc/
 │   ├── queue.ts           # 消息队列 + Job 管理（串行/超时/中断）
 │   ├── commands.ts        # 统一命令系统（fn/fc/fl/fk/fd/fs）
 │   ├── output.ts          # CLI 输出 → 飞书消息格式化
-│   ├── feishu.ts          # 飞书 WebSocket 适配器
+│   ├── feishu.ts          # 飞书 REST 轮询适配器
+│   ├── poll-cursor.ts     # 轮询游标持久化
 │   ├── file-staging.ts    # 文件暂存管理（inbox/校验/TTL清理）
 │   └── logger.ts          # 日志 + 轮转
 ├── bin/
@@ -151,8 +153,9 @@ im2cc/
 |------|------|
 | im:message | 获取与发送消息 |
 | im:message:send_as_bot | 以 Bot 身份发消息 |
-| im:message.group_msg:readonly | 接收群内所有消息（无需 @） |
-| im:message.group_at_msg:readonly | 接收 @Bot 消息 |
+| im:message.group_msg:readonly | 读取群内所有消息（REST 轮询） |
+| im:message.group_at_msg:readonly | 读取 @Bot 消息 |
+| im:chat:readonly | 获取 Bot 所在的群列表（轮询发现） |
 | im:resource | 下载消息中的文件/图片资源 |
 
-事件订阅：`im.message.receive_v1`（使用 WebSocket 长连接模式）
+消息获取方式：REST 轮询（`im.message.list` + `im.chat.list`），不依赖 WebSocket 事件订阅

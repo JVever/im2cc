@@ -20,6 +20,7 @@ export interface Im2ccConfig {
   recapBudget: number           // /fc 时上下文回顾的字符预算，0 = 禁用
   maxFileSizeMB: number         // 文件传输最大体积，默认 10
   inboxTtlMinutes: number       // inbox 文件过期时间，默认 60
+  pollIntervalMs: number        // REST 轮询间隔（毫秒），默认 5000
 }
 
 const CONFIG_DIR = path.join(os.homedir(), '.im2cc')
@@ -39,6 +40,7 @@ const DEFAULT_CONFIG: Im2ccConfig = {
   recapBudget: 2000,
   maxFileSizeMB: 10,
   inboxTtlMinutes: 60,
+  pollIntervalMs: 5000,
 }
 
 function ensureDirs(): void {
