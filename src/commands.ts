@@ -1,6 +1,6 @@
 /**
  * @input:    用户消息文本, Im2ccConfig, Binding
- * @output:   parseCommand(), handleCommand() — 命令解析与执行
+ * @output:   parseCommand(), handleCommand() — 命令解析与执行（含 /fc 双参数注册模式）
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -103,102 +103,172 @@ async function handleFc(args: string, groupId: string, config: Im2ccConfig): Pro
     return `该群已连接，先 /fd 再 /fc`
   }
 
+  const parts = args ? args.split(/\s+/) : []
+
   // 无参数：列出注册表 + 最近发现的对话
-  if (!args) {
-    const registered = listRegistered()
-    const lines: string[] = []
-
-    if (registered.length > 0) {
-      lines.push('📋 已注册的对话:')
-      for (const s of registered) {
-        lines.push(`  ${s.name} (${path.basename(s.cwd)})`)
-      }
-      lines.push('')
-    }
-
-    // 补充：文件系统扫描发现未注册的对话
-    const discovered = await discoverSessions(8)
-    const registeredIds = new Set(registered.map(r => r.sessionId))
-    const unregistered = discovered.filter(d => !registeredIds.has(d.sessionId))
-
-    if (unregistered.length > 0) {
-      lines.push('💡 电脑上最近的对话 (未注册):')
-      for (const s of unregistered.slice(0, 5)) {
-        const label = s.name || s.firstMessage?.slice(0, 30) || '未命名'
-        lines.push(`  ${label} (${s.projectName}) [${s.sessionId.slice(0, 8)}]`)
-      }
-      lines.push('')
-    }
-
-    if (lines.length === 0) return '没有可用的对话'
-
-    lines.push('发 /fc <名称> 接入')
-    return lines.join('\n')
+  if (parts.length === 0) {
+    return listAvailableSessions()
   }
 
+  // 双参数模式: /fc <新名称> <session-query>
+  // 注册一个未注册的对话并接入
+  if (parts.length >= 2) {
+    return handleFcRegisterAndConnect(parts[0], parts.slice(1).join(' '), groupId, config)
+  }
+
+  // 单参数模式: /fc <名称>
+  const query = parts[0]
+
   // 优先从注册表查找
-  const reg = lookup(args)
+  const reg = lookup(query)
   if (reg) {
-    // 独占：关闭本地 tmux 中的 Claude Code
-    const killed = killLocalSession(reg.name)
-    const cliVersion = getClaudeVersion()
-    touch(reg.name)
-    const mode = reg.permissionMode ?? config.defaultPermissionMode
-    const binding = createBinding(groupId, reg.sessionId, reg.cwd, mode, cliVersion)
-    log(`[${groupId}] attach → "${reg.name}" (${reg.sessionId})${killed ? ' [已关闭本地进程]' : ''}`)
-
-    const modeWarning = binding.permissionMode === 'YOLO'
-      ? '⚠️ 当前为 YOLO 模式（自动执行所有操作）\n   切换: /mode default'
-      : `⚙️ 模式: ${binding.permissionMode}`
-
-    return [
-      `✅ 已接入 "${reg.name}"`,
-      killed ? '🔄 已关闭电脑端的对话' : '',
-      `📁 ${path.basename(reg.cwd)}`,
-      modeWarning,
-      '',
-      `回到电脑: im2cc open ${reg.name}`,
-    ].filter(Boolean).join('\n')
+    return connectToRegistered(reg, groupId, config)
   }
 
   // 注册表没有，尝试模糊搜索注册表
-  const regMatches = search(args)
+  const regMatches = search(query)
   if (regMatches.length > 0) {
     const list = regMatches.map(s => `  ${s.name} (${path.basename(s.cwd)})`).join('\n')
     return `多个匹配:\n${list}\n\n请输入更精确的名称`
   }
 
-  // 最后尝试文件系统扫描
-  const discovered = await findSession(args)
+  // 最后尝试文件系统扫描（单参数时用 query 作为注册名）
+  const discovered = await findSession(query)
   if (discovered.length === 1) {
-    const s = discovered[0]
-    const cliVersion = getClaudeVersion()
-    const binding = createBinding(groupId, s.sessionId, s.projectPath, config.defaultPermissionMode, cliVersion)
-    // 自动注册
-    register(args, s.sessionId, s.projectPath)
-    log(`[${groupId}] attach (discovered) → "${args}" (${s.sessionId})`)
-
-    const modeWarning2 = binding.permissionMode === 'YOLO'
-      ? '⚠️ 当前为 YOLO 模式（自动执行所有操作）\n   切换: /mode default'
-      : `⚙️ 模式: ${binding.permissionMode}`
-
-    return [
-      `✅ 已接入 "${s.name || args}"`,
-      `📁 ${s.projectName}`,
-      modeWarning2,
-      '',
-      `回到电脑: im2cc open ${args}`,
-    ].join('\n')
+    return connectToDiscovered(query, discovered[0], groupId, config)
   }
 
   if (discovered.length > 1) {
     const list = discovered.slice(0, 5).map(s =>
       `  ${s.name || s.firstMessage?.slice(0, 30) || '未命名'} (${s.projectName}) [${s.sessionId.slice(0, 8)}]`
     ).join('\n')
-    return `多个对话匹配:\n${list}\n\n请用更精确的名称`
+    return `多个对话匹配:\n${list}\n\n请用更精确的名称，或 /fc <新名称> <ID前缀> 指定`
   }
 
-  return `未找到 "${args}"\n发 /fc 查看所有可用对话`
+  return `未找到 "${query}"\n发 /fc 查看所有可用对话`
+}
+
+/** /fc 无参数：列出已注册 + 未注册对话 */
+async function listAvailableSessions(): Promise<string> {
+  const registered = listRegistered()
+  const lines: string[] = []
+
+  if (registered.length > 0) {
+    lines.push('📋 已注册的对话:')
+    for (const s of registered) {
+      lines.push(`  ${s.name} (${path.basename(s.cwd)})`)
+    }
+    lines.push('')
+  }
+
+  // 文件系统扫描发现未注册的对话
+  const discovered = await discoverSessions(12)
+  const registeredIds = new Set(registered.map(r => r.sessionId))
+  const unregistered = discovered.filter(d => !registeredIds.has(d.sessionId))
+
+  if (unregistered.length > 0) {
+    lines.push('💡 电脑上最近的对话 (未注册):')
+    for (const s of unregistered.slice(0, 5)) {
+      const label = s.name || s.firstMessage?.slice(0, 30) || '未命名'
+      lines.push(`  ${label} (${s.projectName}) [${s.sessionId.slice(0, 8)}]`)
+    }
+    lines.push('')
+  }
+
+  if (lines.length === 0) return '没有可用的对话'
+
+  lines.push('/fc <名称> 接入已注册对话')
+  if (unregistered.length > 0) {
+    lines.push('/fc <新名称> <ID前缀> 注册并接入')
+  }
+  return lines.join('\n')
+}
+
+/** 接入已注册对话 */
+function connectToRegistered(
+  reg: { name: string; sessionId: string; cwd: string; permissionMode?: string },
+  groupId: string,
+  config: Im2ccConfig,
+): string {
+  const killed = killLocalSession(reg.name)
+  const cliVersion = getClaudeVersion()
+  touch(reg.name)
+  const mode = reg.permissionMode ?? config.defaultPermissionMode
+  const binding = createBinding(groupId, reg.sessionId, reg.cwd, mode, cliVersion)
+  log(`[${groupId}] attach → "${reg.name}" (${reg.sessionId})${killed ? ' [已关闭本地进程]' : ''}`)
+
+  const modeWarning = binding.permissionMode === 'YOLO'
+    ? '⚠️ 当前为 YOLO 模式（自动执行所有操作）\n   切换: /mode default'
+    : `⚙️ 模式: ${binding.permissionMode}`
+
+  return [
+    `✅ 已接入 "${reg.name}"`,
+    killed ? '🔄 已关闭电脑端的对话' : '',
+    `📁 ${path.basename(reg.cwd)}`,
+    modeWarning,
+    '',
+    `回到电脑: im2cc open ${reg.name}`,
+  ].filter(Boolean).join('\n')
+}
+
+/** 接入通过文件系统发现的对话（自动注册） */
+function connectToDiscovered(
+  name: string,
+  session: { sessionId: string; name: string; projectPath: string; projectName: string },
+  groupId: string,
+  config: Im2ccConfig,
+): string {
+  const cliVersion = getClaudeVersion()
+  const binding = createBinding(groupId, session.sessionId, session.projectPath, config.defaultPermissionMode, cliVersion)
+  register(name, session.sessionId, session.projectPath)
+  log(`[${groupId}] attach (discovered) → "${name}" (${session.sessionId})`)
+
+  const modeWarning = binding.permissionMode === 'YOLO'
+    ? '⚠️ 当前为 YOLO 模式（自动执行所有操作）\n   切换: /mode default'
+    : `⚙️ 模式: ${binding.permissionMode}`
+
+  return [
+    `✅ 已接入 "${session.name || name}"`,
+    `📁 ${session.projectName}`,
+    modeWarning,
+    '',
+    `回到电脑: im2cc open ${name}`,
+  ].join('\n')
+}
+
+/** /fc <新名称> <session-query> — 注册未注册对话并接入 */
+async function handleFcRegisterAndConnect(
+  name: string,
+  sessionQuery: string,
+  groupId: string,
+  config: Im2ccConfig,
+): Promise<string> {
+  // 检查名称是否已被占用
+  const existingReg = lookup(name)
+  if (existingReg) {
+    return `"${name}" 已注册，请用其他名称\n或直接 /fc ${name} 接入已有对话`
+  }
+
+  // 搜索对话
+  const discovered = await findSession(sessionQuery)
+  if (discovered.length === 0) {
+    return `未找到匹配 "${sessionQuery}" 的对话\n发 /fc 查看所有可用对话`
+  }
+  if (discovered.length > 1) {
+    const list = discovered.slice(0, 5).map(s =>
+      `  ${s.name || s.firstMessage?.slice(0, 30) || '未命名'} (${s.projectName}) [${s.sessionId.slice(0, 8)}]`
+    ).join('\n')
+    return `"${sessionQuery}" 匹配到多个对话:\n${list}\n\n请用更精确的 ID 前缀`
+  }
+
+  // 检查该 session 是否已被其他名称注册
+  const allRegistered = listRegistered()
+  const alreadyRegistered = allRegistered.find(r => r.sessionId === discovered[0].sessionId)
+  if (alreadyRegistered) {
+    return `该对话已注册为 "${alreadyRegistered.name}"\n直接 /fc ${alreadyRegistered.name} 接入`
+  }
+
+  return connectToDiscovered(name, discovered[0], groupId, config)
 }
 
 function handleFd(groupId: string): string {
@@ -341,15 +411,16 @@ function handleHelp(): string {
   return [
     '📖 im2cc 命令（电脑/飞书通用）',
     '',
-    '/fn <名称> [项目]  — 创建新对话',
-    '/fc [名称]         — 接入已有对话',
-    '/fl                — 列出所有对话',
-    '/fk <名称>         — 终止对话',
-    '/fd                — 断开当前对话',
-    '/fs                — 查看当前状态',
+    '/fn <名称> [项目]        — 创建新对话',
+    '/fc [名称]               — 接入已有对话',
+    '/fc <名称> <ID前缀>      — 注册并接入未注册对话',
+    '/fl                      — 列出所有对话',
+    '/fk <名称>               — 终止对话',
+    '/fd                      — 断开当前对话',
+    '/fs                      — 查看当前状态',
     '',
-    '/mode <模式>       — 切换模式 (YOLO|default|auto-edit)',
-    '/stop              — 中断当前执行',
+    '/mode <模式>             — 切换模式 (YOLO|default|auto-edit)',
+    '/stop                    — 中断当前执行',
     '',
     '直接发消息即转给 Claude Code',
     '',

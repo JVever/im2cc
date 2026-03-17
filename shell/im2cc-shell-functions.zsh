@@ -171,7 +171,7 @@ fn() {
   _im2cc_connect "$tmux_name"
 }
 
-# fc [name] — 接入已有对话
+# fc [name] [session-query] — 接入已有对话 / 注册并接入未注册对话
 fc() {
   if [[ -z "$1" ]]; then
     # 无参数：列出对话或自动接入唯一对话
@@ -203,6 +203,84 @@ for name in sorted(reg.keys()):
     fi
   fi
 
+  # 双参数模式: fc <新名称> <session-query>
+  if [[ -n "$2" ]]; then
+    local new_name="$1"
+    local query="$2"
+
+    # 检查名称是否已注册
+    if _im2cc_read_session "$new_name" >/dev/null 2>&1; then
+      echo "\"$new_name\" 已注册。用 fc $new_name 直接接入。"
+      return 1
+    fi
+
+    # 搜索匹配的 session 文件
+    local match
+    match=$(python3 -c "
+import os, json, glob
+
+projects_dir = os.path.expanduser('~/.claude/projects')
+query = '$query'.lower()
+matches = []
+
+for slug in os.listdir(projects_dir):
+    slug_dir = os.path.join(projects_dir, slug)
+    if not os.path.isdir(slug_dir): continue
+    for f in os.listdir(slug_dir):
+        if not f.endswith('.jsonl'): continue
+        sid = f[:-6]
+        if sid.lower().startswith(query):
+            fp = os.path.join(slug_dir, f)
+            mtime = os.path.getmtime(fp)
+            # 尝试还原项目路径
+            direct = '/' + slug[1:].replace('-', '/')
+            cwd = direct if os.path.isdir(direct) else ''
+            matches.append((sid, cwd, mtime))
+
+if len(matches) == 1:
+    sid, cwd, _ = matches[0]
+    print(f'{sid}|{cwd}')
+elif len(matches) == 0:
+    pass  # no output = not found
+else:
+    for sid, cwd, _ in sorted(matches, key=lambda x: -x[2])[:5]:
+        print(f'MULTI|{sid[:8]}', end=' ')
+" 2>/dev/null)
+
+    if [[ -z "$match" ]]; then
+      echo "❌ 未找到匹配 \"$query\" 的对话"
+      return 1
+    fi
+
+    if [[ "$match" == MULTI* ]]; then
+      echo "多个对话匹配: ${match#MULTI|}"
+      echo "请用更精确的 ID 前缀"
+      return 1
+    fi
+
+    local session_id="${match%%|*}"
+    local cwd="${match##*|}"
+
+    if [[ -z "$cwd" ]]; then
+      echo "❌ 无法还原项目路径"
+      return 1
+    fi
+
+    # 注册并打开
+    _im2cc_register "$new_name" "$session_id" "$cwd"
+    echo "✅ 已注册 \"$new_name\" → $(basename "$cwd") [$session_id]"
+
+    local tmux_name="${_IM2CC_TMUX_PREFIX}${new_name}"
+    _im2cc_release_feishu "$session_id" "$new_name"
+
+    tmux new-session -d -s "$tmux_name" -c "$cwd" \
+      "claude --resume $session_id --dangerously-skip-permissions --name 'im2cc:${new_name}'"
+
+    _im2cc_connect "$tmux_name"
+    return
+  fi
+
+  # 单参数模式: fc <name>
   local name="$1"
   local info
   info="$(_im2cc_read_session "$name")" || { echo "❌ 未找到 \"$name\"。用 fl 查看列表。"; return 1; }

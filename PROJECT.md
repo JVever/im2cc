@@ -60,6 +60,7 @@ fk myproject
 |------|------|---------|---------|
 | **fn** | 创建新对话 | `fn auth im2cc` | `/fn auth im2cc` |
 | **fc** | 接入已有对话 | `fc auth` | `/fc auth` |
+| **fc** | 注册并接入未注册对话 | `fc my-fork 2961` | `/fc my-fork 2961` |
 | **fl** | 列出所有对话 | `fl` | `/fl` |
 | **fk** | 终止对话 | `fk auth` | `/fk auth` |
 | **fd** | 断开当前对话 | `fd`（tmux detach） | `/fd` |
@@ -146,6 +147,7 @@ im2cc/
 4. **独占访问** — 同一 session 永远只在一个地方活跃，daemon 端有防线兜底
 5. **YOLO 模式** — 默认 `--dangerously-skip-permissions`，远程操控无需确认
 6. **stream-json + --verbose** — 获取完整的流式事件输出
+7. **分叉感知** — SparkChat 等工具产生的对话分叉可通过 `fc <名称> <ID前缀>` 注册并流转到飞书
 
 ## 飞书 App 配置要求
 

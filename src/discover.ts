@@ -97,12 +97,12 @@ async function parseSessionMeta(
         name = obj.agentName
       }
 
-      // 找首条 user 消息
-      if (!firstMessage && obj.type === 'user') {
+      // 找首条真实 user 消息（跳过 meta/系统消息）
+      if (!firstMessage && obj.type === 'user' && !obj.isMeta) {
         const msg = obj.message as Record<string, unknown> | undefined
         if (msg) {
           const content = msg.content
-          if (typeof content === 'string') {
+          if (typeof content === 'string' && !content.startsWith('<')) {
             firstMessage = content.slice(0, 80)
           } else if (Array.isArray(content)) {
             for (const c of content) {
