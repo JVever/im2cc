@@ -204,8 +204,11 @@ export async function startDaemon(): Promise<void> {
         return
       }
 
-      // 独占检查：如果 session 正在电脑端 tmux 中使用，自动解绑远程端
-      const regEntry = listRegistered().find(r => r.sessionId === binding.sessionId)
+      // 独占检查：如果当前 session 正在电脑端 tmux 中使用，自动解绑远程端
+      // 用 sessionId + cwd 双重匹配找到正确的 registry 条目（防止 session ID 冲突时误判）
+      const regEntry = listRegistered().find(r =>
+        r.sessionId === binding.sessionId && r.cwd === binding.cwd
+      ) ?? listRegistered().find(r => r.sessionId === binding.sessionId)
       if (regEntry && isSessionLocallyActive(regEntry.name)) {
         archiveBinding(conversationId)
         log(`[${conversationId}] 检测到 "${regEntry.name}" 在电脑端活跃，自动解绑`)

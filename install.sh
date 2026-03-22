@@ -116,56 +116,54 @@ install_hook() {
   # 确保目录存在
   mkdir -p "$HOME/.claude"
 
-  if [ -f "$CLAUDE_SETTINGS" ]; then
-    # 检查是否已安装
-    if grep -q "im2cc-session-sync" "$CLAUDE_SETTINGS" 2>/dev/null; then
-      ok "Session 同步 hook 已配置"
-      return
-    fi
-
-    # 已有 settings.json，用 python 安全地合并 hook
-    python3 -c "
-import json, sys
+  # 用 python 检查并安装/修复 hook（处理旧格式、路径变化等）
+  python3 -c "
+import json, os, sys
 
 settings_path = '$CLAUDE_SETTINGS'
 hook_cmd = '$HOOK_SCRIPT'
 
-with open(settings_path) as f:
-    settings = json.load(f)
+# 加载或创建 settings
+if os.path.exists(settings_path):
+    with open(settings_path) as f:
+        settings = json.load(f)
+else:
+    settings = {}
 
 hooks = settings.setdefault('hooks', {})
-session_hooks = hooks.setdefault('SessionStart', [])
+session_hooks = hooks.get('SessionStart', [])
 
-# 检查是否已存在
+# 检查是否有格式正确的 im2cc hook
+has_valid_hook = False
 for h in session_hooks:
-    if 'im2cc-session-sync' in h.get('command', ''):
-        sys.exit(0)
+    if h.get('type') == 'command' and 'im2cc-session-sync' in h.get('command', ''):
+        # 已有正确格式的 hook，更新路径
+        if h['command'] != hook_cmd:
+            h['command'] = hook_cmd
+            print('UPDATE', file=sys.stderr)
+        else:
+            print('OK', file=sys.stderr)
+        has_valid_hook = True
+        break
 
-session_hooks.append({
-    'type': 'command',
-    'command': hook_cmd
-})
+if not has_valid_hook:
+    # 清理旧格式的条目（如嵌套 hooks 格式）
+    session_hooks = [h for h in session_hooks
+                     if not (isinstance(h.get('hooks'), list) and
+                             any('im2cc-session-sync' in hh.get('command', '') for hh in h['hooks']))]
+    # 添加正确格式
+    session_hooks.append({'type': 'command', 'command': hook_cmd})
+    print('INSTALL', file=sys.stderr)
 
+hooks['SessionStart'] = session_hooks
 with open(settings_path, 'w') as f:
     json.dump(settings, f, indent=2)
 " 2>/dev/null
-    ok "Session 同步 hook 已安装"
+  local result=$?
+  if [ $result -eq 0 ]; then
+    ok "Session 同步 hook 已配置"
   else
-    # 没有 settings.json，创建一个
-    python3 -c "
-import json
-settings = {
-    'hooks': {
-        'SessionStart': [{
-            'type': 'command',
-            'command': '$HOOK_SCRIPT'
-        }]
-    }
-}
-with open('$CLAUDE_SETTINGS', 'w') as f:
-    json.dump(settings, f, indent=2)
-" 2>/dev/null
-    ok "Session 同步 hook 已安装（新建 settings.json）"
+    warn "Session 同步 hook 安装失败，请手动配置"
   fi
 }
 
