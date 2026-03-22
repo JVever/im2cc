@@ -290,10 +290,12 @@ function handleFd(conversationId: string): string {
   const binding = archiveBinding(conversationId)
   if (!binding) return '该群未绑定任何 session'
 
-  const projectName = path.basename(binding.cwd)
+  // 查找注册名称，给出正确的 fc 提示
+  const regEntry = listRegistered().find(r => r.sessionId === binding.sessionId)
+  const hint = regEntry ? `回到电脑: fc ${regEntry.name}` : '回到电脑后用 fc <名称> 接回'
   return [
     '✅ 已解绑',
-    `回到电脑: claude --resume "${projectName}"`,
+    hint,
   ].join('\n')
 }
 
@@ -377,6 +379,10 @@ function handleFs(conversationId: string): string {
   const qs = getQueueStatus(conversationId)
   const projectName = path.basename(binding.cwd)
 
+  // 查找注册名称，给出正确的 fc 提示
+  const regEntry = listRegistered().find(r => r.sessionId === binding.sessionId)
+  const hint = regEntry ? `fc ${regEntry.name}` : `fc <名称>`
+
   return [
     `📊 ${projectName}`,
     `  目录: ${binding.cwd}`,
@@ -384,7 +390,7 @@ function handleFs(conversationId: string): string {
     `  轮次: ${binding.turnCount}`,
     `  状态: ${qs.state}${qs.queueLength > 0 ? ` (队列 ${qs.queueLength})` : ''}`,
     '',
-    `  回到电脑: claude --resume "${projectName}"`,
+    `  回到电脑: ${hint}`,
   ].join('\n')
 }
 

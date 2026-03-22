@@ -7,7 +7,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { execSync } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { loadConfig, getPidFile, loadWeChatAccount } from './config.js'
 import { isUserAllowed } from './security.js'
 import { isDuplicate, listActiveBindings, getBinding, archiveBinding } from './session.js'
@@ -23,7 +23,7 @@ import type { TransportAdapter, IncomingMessage, TransportType } from './transpo
 /** 检查某个 session 是否正在被本地 tmux 使用 */
 function isSessionLocallyActive(sessionName: string): boolean {
   try {
-    execSync(`tmux has-session -t "im2cc-${sessionName}" 2>/dev/null`)
+    execFileSync('tmux', ['has-session', '-t', `im2cc-${sessionName}`], { stdio: 'ignore' })
     return true
   } catch { return false }
 }
@@ -136,6 +136,14 @@ export async function startDaemon(): Promise<void> {
 
         await adapter.downloadMedia(messageId, msg.fileKey!, msg.msgType!, destPath)
 
+        // 检查文件大小是否超过限制
+        const stats = fs.statSync(destPath)
+        if (stats.size > config.maxFileSizeMB * 1024 * 1024) {
+          fs.unlinkSync(destPath)
+          await send(`文件过大 (${(stats.size / 1024 / 1024).toFixed(1)}MB)，上限 ${config.maxFileSizeMB}MB`)
+          return
+        }
+
         stageFile(conversationId, {
           filePath: destPath,
           originalName: msg.fileName!,
@@ -155,7 +163,7 @@ export async function startDaemon(): Promise<void> {
 
     // 文本消息处理
     const { text } = msg
-    log(`收到消息 [${conversationId}] ${senderId}: ${text!.slice(0, 80)}`)
+    log(`收到消息 [${conversationId}] ${senderId}: ${text!.slice(0, 30)}`)
 
     const cmd = parseCommand(text!)
 

@@ -4,10 +4,32 @@
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
+import fs from 'node:fs'
+import path from 'node:path'
 import type { TransportAdapter, IncomingMessage } from './transport.js'
 import type { WeChatAccount } from './config.js'
-import { saveWeChatAccount } from './config.js'
+import { saveWeChatAccount, getDataDir } from './config.js'
 import { log, error } from './logger.js'
+
+// --- context_token 持久化 ---
+
+const CTX_TOKEN_FILE = () => path.join(getDataDir(), 'wechat-ctx-tokens.json')
+
+function loadContextTokens(): Map<string, string> {
+  try {
+    const data = JSON.parse(fs.readFileSync(CTX_TOKEN_FILE(), 'utf-8')) as Record<string, string>
+    return new Map(Object.entries(data))
+  } catch { return new Map() }
+}
+
+function saveContextTokens(tokens: Map<string, string>): void {
+  const file = CTX_TOKEN_FILE()
+  const tmp = file + '.tmp'
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(Object.fromEntries(tokens)))
+    fs.renameSync(tmp, file)
+  } catch { /* 非关键路径 */ }
+}
 
 /** iLink 请求头（每次请求需要新的 X-WECHAT-UIN） */
 function makeHeaders(botToken: string): Record<string, string> {
@@ -45,6 +67,8 @@ export class WeChatAdapter implements TransportAdapter {
   constructor(account: WeChatAccount) {
     this.account = account
     this.syncBuf = account.syncBuf || ''
+    // 恢复持久化的 context tokens
+    this.contextTokens = loadContextTokens()
   }
 
   async start(onMessage: (msg: IncomingMessage) => Promise<void>): Promise<void> {
@@ -73,7 +97,7 @@ export class WeChatAdapter implements TransportAdapter {
         if (messages.length > 0) {
           log(`[wechat] 收到 ${messages.length} 条原始消息`)
           for (const m of messages) {
-            log(`[wechat] 原始消息完整: ${JSON.stringify(m).slice(0, 2000)}`)
+            log(`[wechat] 消息 type=${m.message_type} from=${m.from_user_id}`)
           }
         }
 
@@ -86,9 +110,10 @@ export class WeChatAdapter implements TransportAdapter {
           const text = firstItem?.text_item?.text || firstItem?.voice_item?.voice_text || ''
           if (!text.trim()) continue
 
-          // 缓存 context_token
+          // 缓存 context_token 并持久化
           if (rawMsg.context_token) {
             this.contextTokens.set(rawMsg.from_user_id, rawMsg.context_token)
+            saveContextTokens(this.contextTokens)
           }
 
           const msg: IncomingMessage = {

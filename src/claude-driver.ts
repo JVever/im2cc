@@ -7,7 +7,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { spawn, execSync, type ChildProcess } from 'node:child_process'
+import { spawn, execSync, execFileSync, type ChildProcess } from 'node:child_process'
 import crypto from 'node:crypto'
 import { log } from './logger.js'
 import { pathToSlug } from './discover.js'
@@ -96,17 +96,14 @@ export function killLocalSession(sessionName: string): boolean {
   const tmuxSession = `im2cc-${sessionName}`
   try {
     // 方式 1：通过 tmux session 名称关闭（最可靠）
-    execSync(`tmux has-session -t "${tmuxSession}" 2>/dev/null`)
-    execSync(`tmux kill-session -t "${tmuxSession}" 2>/dev/null`)
+    execFileSync('tmux', ['has-session', '-t', tmuxSession], { stdio: 'ignore' })
+    execFileSync('tmux', ['kill-session', '-t', tmuxSession], { stdio: 'ignore' })
     return true
   } catch { /* tmux session 不存在 */ }
 
   try {
     // 方式 2：fallback，通过进程参数匹配
-    const result = execSync(
-      `pgrep -f "claude.*${sessionName}" 2>/dev/null || true`,
-      { encoding: 'utf-8' },
-    ).trim()
+    const result = execFileSync('pgrep', ['-f', `claude.*${sessionName}`], { encoding: 'utf-8' }).trim()
     if (!result) return false
 
     const pids = result.split('\n').map(s => parseInt(s.trim())).filter(n => !isNaN(n) && n !== process.pid)

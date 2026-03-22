@@ -171,7 +171,7 @@ async function processNext(
   }
 
   group.state = 'busy'
-  log(`[${conversationId}] 开始执行: ${msg.text.slice(0, 50)}...`)
+  log(`[${conversationId}] 开始执行: ${msg.text.slice(0, 30)}...`)
 
   // 创建 inflight 记录
   const inflight = createInflight(conversationId, binding.sessionId, msg.text)
@@ -200,16 +200,16 @@ async function processNext(
         },
         outputFile,
         onTurnText: (text) => {
-          // 每轮 assistant 文字就绪后立即发到飞书
+          // 每轮 assistant 文字就绪后立即发到 IM
           streamed = true
-          sendReply(formatOutput(text, binding.sessionId)).catch(() => {})
+          sendReply(formatOutput(text, binding.sessionId, binding.transport)).catch(() => {})
         },
       },
     )
 
     updateBinding(conversationId, { turnCount: binding.turnCount + 1 })
     // 如果已经流式发送过，不再重复发最终累积文本
-    msg.resolve(streamed ? '' : formatOutput(output, binding.sessionId))
+    msg.resolve(streamed ? '' : formatOutput(output, binding.sessionId, binding.transport))
   } catch (err) {
     msg.reject(err instanceof Error ? err : new Error(String(err)))
   } finally {
@@ -233,7 +233,7 @@ export async function handleStop(conversationId: string): Promise<string> {
   }
   group.state = 'cancelling'
   await interrupt(group.currentChild)
-  group.state = 'idle'
+  // 不在此处设置 idle — processNext 的 finally 块会负责状态转换
   return '✅ 已中断当前任务'
 }
 
@@ -268,8 +268,12 @@ export async function recoverOnStartup(
         resultText = fs.readFileSync(outputPath, 'utf-8').trim()
       }
 
+      // 获取 transport 类型用于格式化
+      const recoveryBinding = getBinding(meta.conversationId)
+      const recoveryTransport = recoveryBinding?.transport ?? 'feishu' as const
+
       if (resultText) {
-        await sendToGroup(meta.conversationId, formatOutput(resultText, meta.sessionId))
+        await sendToGroup(meta.conversationId, formatOutput(resultText, meta.sessionId, recoveryTransport))
         log(`[recovery] 已发送 "${meta.text.slice(0, 30)}..." 的结果`)
       } else {
         await sendToGroup(meta.conversationId,

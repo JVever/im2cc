@@ -8,7 +8,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { execSync, fork } from 'node:child_process'
+import { execSync, execFileSync, fork } from 'node:child_process'
 import { loadConfig, saveConfig, configExists, getPidFile, getLogDir, getConfigDir, loadWeChatAccount, saveWeChatAccount, getWeChatAccountFile, type Im2ccConfig } from '../src/config.js'
 import { listActiveBindings } from '../src/session.js'
 import { getClaudeVersion, createSession, checkSessionFile } from '../src/claude-driver.js'
@@ -196,13 +196,16 @@ async function cmdNew(): Promise<void> {
     // 在 tmux 中启动交互式 Claude Code
     const tmuxSession = TMUX_PREFIX + name
     try {
-      execSync(`tmux new-session -d -s "${tmuxSession}" -c "${validation.resolvedPath}" "claude --resume ${sessionId} --name 'im2cc:${name}'"`)
-      execSync(`tmux attach -t "${tmuxSession}"`, { stdio: 'inherit' })
+      execFileSync('tmux', [
+        'new-session', '-d', '-s', tmuxSession, '-c', validation.resolvedPath,
+        'claude', '--resume', sessionId, '--name', `im2cc:${name}`,
+      ])
+      execFileSync('tmux', ['attach', '-t', tmuxSession], { stdio: 'inherit' })
     } catch {
       // tmux 不可用，直接启动
       console.log(`✅ 已创建 "${name}"`)
       console.log(`   打开: im2cc open ${name}`)
-      execSync(`claude --resume ${sessionId} --name "im2cc:${name}"`, { stdio: 'inherit', cwd: validation.resolvedPath })
+      execFileSync('claude', ['--resume', sessionId, '--name', `im2cc:${name}`], { stdio: 'inherit', cwd: validation.resolvedPath })
     }
   } catch (err) {
     console.error(`❌ 创建失败: ${err instanceof Error ? err.message : String(err)}`)
@@ -273,9 +276,9 @@ async function cmdOpen(): Promise<void> {
 
   try {
     // 检查 tmux session 是否存在
-    execSync(`tmux has-session -t "${tmuxSession}" 2>/dev/null`)
+    execFileSync('tmux', ['has-session', '-t', tmuxSession], { stdio: 'ignore' })
     // 存在，直接 attach
-    execSync(`tmux attach -t "${tmuxSession}"`, { stdio: 'inherit' })
+    execFileSync('tmux', ['attach', '-t', tmuxSession], { stdio: 'inherit' })
   } catch {
     // 不存在，创建新的 tmux session — 先验证 session 文件位置
     const status = checkSessionFile(session.sessionId, session.cwd)
@@ -288,11 +291,14 @@ async function cmdOpen(): Promise<void> {
     const sessionFlag = status === 'here' ? '--resume' : '--session-id'
 
     try {
-      execSync(`tmux new-session -d -s "${tmuxSession}" -c "${session.cwd}" "claude ${sessionFlag} ${session.sessionId} --name 'im2cc:${session.name}'"`)
-      execSync(`tmux attach -t "${tmuxSession}"`, { stdio: 'inherit' })
+      execFileSync('tmux', [
+        'new-session', '-d', '-s', tmuxSession, '-c', session.cwd,
+        'claude', sessionFlag, session.sessionId, '--name', `im2cc:${session.name}`,
+      ])
+      execFileSync('tmux', ['attach', '-t', tmuxSession], { stdio: 'inherit' })
     } catch {
       // tmux 不可用，直接启动
-      execSync(`claude ${sessionFlag} ${session.sessionId} --name "im2cc:${session.name}"`, { stdio: 'inherit', cwd: session.cwd })
+      execFileSync('claude', [sessionFlag, session.sessionId, '--name', `im2cc:${session.name}`], { stdio: 'inherit', cwd: session.cwd })
     }
   }
 }

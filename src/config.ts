@@ -69,8 +69,12 @@ export function saveConfig(config: Im2ccConfig): void {
 }
 
 export function configExists(): boolean {
-  return fs.existsSync(CONFIG_FILE) &&
-    (() => { const c = loadConfig(); return c.feishu.appId !== '' })()
+  if (!fs.existsSync(CONFIG_FILE)) return false
+  const c = loadConfig()
+  if (c.feishu.appId !== '') return true
+  // WeChat-only 配置也视为有效
+  const wa = loadWeChatAccount()
+  return wa !== null && wa.botToken !== ''
 }
 
 export function getDataDir(): string { ensureDirs(); return DATA_DIR }
