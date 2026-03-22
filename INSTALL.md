@@ -51,14 +51,21 @@ echo "source \"$(pwd)/shell/im2cc-shell-functions.zsh\"" >> ~/.bashrc
 
 将 session 漂移同步 hook 安装到 `~/.claude/settings.json` 中。
 
-读取现有的 `~/.claude/settings.json`（如果存在），在 `hooks.SessionStart` 数组中添加：
+读取现有的 `~/.claude/settings.json`（如果存在），在 `hooks.SessionStart` 数组中添加一个条目。注意 Claude Code hook 的格式是 `matcher` + `hooks` 数组结构：
 
 ```json
 {
-  "type": "command",
-  "command": "<im2cc安装目录的绝对路径>/shell/im2cc-session-sync.sh"
+  "matcher": "",
+  "hooks": [
+    {
+      "type": "command",
+      "command": "<im2cc安装目录的绝对路径>/shell/im2cc-session-sync.sh"
+    }
+  ]
 }
 ```
+
+`matcher` 为空字符串表示匹配所有情况。
 
 如果文件不存在，创建它。如果已有 `im2cc-session-sync` 相关条目，跳过。
 

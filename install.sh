@@ -116,14 +116,14 @@ install_hook() {
   # 确保目录存在
   mkdir -p "$HOME/.claude"
 
-  # 用 python 检查并安装/修复 hook（处理旧格式、路径变化等）
+  # 用 python 检查并安装/修复 hook
+  # Claude Code hook 格式: {"matcher": "", "hooks": [{"type": "command", "command": "..."}]}
   python3 -c "
 import json, os, sys
 
 settings_path = '$CLAUDE_SETTINGS'
 hook_cmd = '$HOOK_SCRIPT'
 
-# 加载或创建 settings
 if os.path.exists(settings_path):
     with open(settings_path) as f:
         settings = json.load(f)
@@ -133,29 +133,28 @@ else:
 hooks = settings.setdefault('hooks', {})
 session_hooks = hooks.get('SessionStart', [])
 
-# 检查是否有格式正确的 im2cc hook
-has_valid_hook = False
-for h in session_hooks:
-    if h.get('type') == 'command' and 'im2cc-session-sync' in h.get('command', ''):
-        # 已有正确格式的 hook，更新路径
-        if h['command'] != hook_cmd:
-            h['command'] = hook_cmd
-            print('UPDATE', file=sys.stderr)
-        else:
-            print('OK', file=sys.stderr)
-        has_valid_hook = True
-        break
+# 查找已有的 im2cc hook（任何格式）并清理
+cleaned = []
+found = False
+for entry in session_hooks:
+    inner = entry.get('hooks', [])
+    if isinstance(inner, list) and any('im2cc-session-sync' in h.get('command', '') for h in inner):
+        # 已有 im2cc hook，更新路径
+        entry['hooks'] = [{'type': 'command', 'command': hook_cmd}]
+        entry.setdefault('matcher', '')
+        cleaned.append(entry)
+        found = True
+    elif entry.get('type') == 'command' and 'im2cc-session-sync' in entry.get('command', ''):
+        # 旧的扁平格式，转为正确格式
+        cleaned.append({'matcher': '', 'hooks': [{'type': 'command', 'command': hook_cmd}]})
+        found = True
+    else:
+        cleaned.append(entry)
 
-if not has_valid_hook:
-    # 清理旧格式的条目（如嵌套 hooks 格式）
-    session_hooks = [h for h in session_hooks
-                     if not (isinstance(h.get('hooks'), list) and
-                             any('im2cc-session-sync' in hh.get('command', '') for hh in h['hooks']))]
-    # 添加正确格式
-    session_hooks.append({'type': 'command', 'command': hook_cmd})
-    print('INSTALL', file=sys.stderr)
+if not found:
+    cleaned.append({'matcher': '', 'hooks': [{'type': 'command', 'command': hook_cmd}]})
 
-hooks['SessionStart'] = session_hooks
+hooks['SessionStart'] = cleaned
 with open(settings_path, 'w') as f:
     json.dump(settings, f, indent=2)
 " 2>/dev/null
