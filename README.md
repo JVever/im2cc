@@ -43,19 +43,27 @@ im2cc 不是一个新的 AI 助手，它是你电脑上那个 Claude Code 的「
 
 ## 快速开始
 
-### 第 1 步：安装
+### 方式一：让 Claude Code 帮你安装（推荐）
 
-确保电脑上已有 [Node.js](https://nodejs.org/)（>= 20）、[tmux](https://github.com/tmux/tmux) 和 [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)，然后：
+如果你已经在用 Claude Code，把下面这段话直接发给它：
+
+> 请帮我安装 im2cc（一个让我在手机上通过飞书/微信远程操控你的工具）。先执行 `git clone https://github.com/JVever/im2cc.git ~/im2cc`，然后阅读 `~/im2cc/INSTALL.md` 并按其中的步骤完成全部安装和配置。
+
+Claude Code 会自动处理所有事情——包括安装缺失的依赖、编译项目、配置环境，遇到问题也会自己解决。你只需要在它需要你操作的时候配合一下（比如去飞书后台创建 App、或者用微信扫码）。
+
+### 方式二：手动安装
+
+如果你更习惯自己动手，确保电脑上已有 [Node.js](https://nodejs.org/)（>= 20）、[tmux](https://github.com/tmux/tmux) 和 [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)，然后：
 
 ```bash
-git clone https://github.com/JVever/im2cc.git
-cd im2cc
+git clone https://github.com/JVever/im2cc.git ~/im2cc
+cd ~/im2cc
 bash install.sh
 ```
 
-安装脚本会自动完成：依赖安装、编译、注册全局命令、配置终端快捷命令（fn/fc/fl 等）、安装 session 同步 hook。如有缺失的依赖，会提示你如何安装。
+安装脚本会自动完成：依赖安装、编译、注册全局命令、配置终端快捷命令、安装 session 同步 hook。如有缺失的依赖，会告诉你如何安装。
 
-### 第 2 步：连接飞书或微信
+### 连接飞书或微信
 
 **飞书**（需要先在[飞书开放平台](https://open.feishu.cn/)创建一个自建应用 Bot）：
 
