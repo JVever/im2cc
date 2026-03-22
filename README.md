@@ -43,40 +43,31 @@ im2cc 不是一个新的 AI 助手，它是你电脑上那个 Claude Code 的「
 
 ## 快速开始
 
-### 前置要求
+### 第 1 步：安装
 
-- 一台运行 macOS/Linux 的电脑
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) 已安装
-- [Node.js](https://nodejs.org/) >= 20
-- [tmux](https://github.com/tmux/tmux)
-- 飞书自建应用（Bot）和/或 微信 ClawBot 权限
-
-### 安装
+确保电脑上已有 [Node.js](https://nodejs.org/)（>= 20）、[tmux](https://github.com/tmux/tmux) 和 [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)，然后：
 
 ```bash
 git clone https://github.com/JVever/im2cc.git
 cd im2cc
-npm install && npm run build && npm link
+bash install.sh
 ```
 
-将终端命令加入 shell（以 zsh 为例）：
+安装脚本会自动完成：依赖安装、编译、注册全局命令、配置终端快捷命令（fn/fc/fl 等）、安装 session 同步 hook。如有缺失的依赖，会提示你如何安装。
 
-```bash
-echo 'source /path/to/im2cc/shell/im2cc-shell-functions.zsh' >> ~/.zshrc
-source ~/.zshrc
-```
+### 第 2 步：连接飞书或微信
 
-### 连接飞书
+**飞书**（需要先在[飞书开放平台](https://open.feishu.cn/)创建一个自建应用 Bot）：
 
 ```bash
 im2cc setup    # 输入飞书 App ID 和 App Secret
 im2cc start    # 启动守护进程
 ```
 
-在飞书群里加入你的 Bot，然后发 `/fc` 就能开始了。
+把 Bot 加入飞书群，在群里发 `/fl` 试试——你会看到电脑上所有已注册的 Claude Code 对话。
 
 <details>
-<summary>飞书 App 需要的权限</summary>
+<summary>飞书 App 需要的权限（6 个）</summary>
 
 | 权限 | 用途 |
 |------|------|
@@ -89,35 +80,29 @@ im2cc start    # 启动守护进程
 
 </details>
 
-### 连接微信（可选）
+**微信**（需要微信 iOS 8.0.70+，且已开启 ClawBot 插件：设置 → 插件 → ClawBot）：
 
 ```bash
-im2cc wechat login              # 终端显示 QR 码，用微信扫码
-im2cc stop && im2cc start       # 重启守护进程
+im2cc wechat login    # 终端显示 QR 码，用微信扫码绑定
+im2cc start           # 启动守护进程（如已在运行则 im2cc stop 后再 start）
 ```
 
-需要微信已开启 ClawBot 插件（设置 → 插件 → ClawBot）。
+> 微信目前支持纯文本对话。文件/图片传输功能仅飞书可用。
 
-> 微信目前支持纯文本对话。文件/图片传输仅飞书支持。
+### 第 3 步：开始使用
 
-### Session 漂移同步（推荐配置）
+```bash
+# 电脑上创建一个 Claude Code 对话
+fn myproject ~/Code/my-project
 
-Claude Code 的 Plan 模式会在内部创建新 session。配置此 hook 可自动同步，避免 `fc` 恢复到旧对话：
+# 离开电脑后，在飞书群或微信中接入这个对话
+/fc myproject
 
-在 `~/.claude/settings.json` 中添加：
-
-```json
-{
-  "hooks": {
-    "SessionStart": [
-      {
-        "type": "command",
-        "command": "/path/to/im2cc/shell/im2cc-session-sync.sh"
-      }
-    ]
-  }
-}
+# 回到电脑，把对话接回来
+fc myproject
 ```
+
+遇到问题？运行 `im2cc doctor` 检查环境状态。
 
 ## 命令速查
 
