@@ -1,6 +1,6 @@
 /**
- * @input:    Im2ccConfig, 飞书 REST 轮询消息, Claude Code CLI, recap, file-staging
- * @output:   startDaemon() — 主入口：初始化各模块、启动飞书轮询、消息路由、/fc 上下文回顾、文件暂存与合并
+ * @input:    Im2ccConfig, Transport adapters, Claude Code CLI, recap, file-staging
+ * @output:   startDaemon() — 主入口：初始化各模块、启动 transport 轮询、消息路由、/fc 上下文回顾、文件暂存与合并
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -8,16 +8,17 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execSync } from 'node:child_process'
-import { loadConfig, getPidFile } from './config.js'
+import { loadConfig, getPidFile, loadWeChatAccount } from './config.js'
 import { isUserAllowed } from './security.js'
 import { isDuplicate, listActiveBindings, getBinding, archiveBinding } from './session.js'
 import { parseCommand, handleCommand } from './commands.js'
 import { enqueue, recoverOnStartup } from './queue.js'
-import { startFeishu, sendTextMessage, downloadResource, type IncomingMessage } from './feishu.js'
-import { listRegistered, lookup } from './registry.js'
+import { FeishuAdapter } from './feishu.js'
+import { listRegistered } from './registry.js'
 import { buildRecap } from './recap.js'
 import { stageFile, consumeStaged, ensureInbox, classifyFile, runInboxCleanup } from './file-staging.js'
 import { log, error } from './logger.js'
+import type { TransportAdapter, IncomingMessage, TransportType } from './transport.js'
 
 /** 检查某个 session 是否正在被本地 tmux 使用 */
 function isSessionLocallyActive(sessionName: string): boolean {
@@ -35,7 +36,7 @@ function acquireLock(): boolean {
     const existingPid = parseInt(fs.readFileSync(pidFile, 'utf-8').trim())
     if (!isNaN(existingPid)) {
       try {
-        process.kill(existingPid, 0) // 检查进程是否存活
+        process.kill(existingPid, 0)
         error(`另一个 im2cc 守护进程已在运行 (PID: ${existingPid})，本次启动终止`)
         return false
       } catch {
@@ -44,10 +45,8 @@ function acquireLock(): boolean {
     }
   }
 
-  // 写入自己的 PID
   fs.writeFileSync(pidFile, String(process.pid))
 
-  // 退出时清理 PID 文件
   const cleanup = () => {
     try { if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile) } catch {}
   }
@@ -73,94 +72,116 @@ export async function startDaemon(): Promise<void> {
     log(`发现 ${activeBindings.length} 个活跃绑定，发送重启通知`)
   }
 
-  // 消息处理
-  async function handleMessage(msg: IncomingMessage): Promise<void> {
-    const { messageId, chatId, senderId } = msg
+  // --- Transport adapters ---
+  const adapters = new Map<TransportType, TransportAdapter>()
 
-    // 消息去重
+  /** 通过 transport 类型找到对应 adapter 发送消息 */
+  function sendToConversation(transport: TransportType, conversationId: string, text: string): Promise<void> {
+    const adapter = adapters.get(transport)
+    if (!adapter) {
+      error(`[send] 无可用 adapter: ${transport}`)
+      return Promise.resolve()
+    }
+    return adapter.sendText(conversationId, text)
+  }
+
+  /** 根据 conversationId 从 binding 推断 transport 并发送消息 */
+  async function sendByConversationId(conversationId: string, text: string): Promise<void> {
+    const binding = getBinding(conversationId)
+    const transport = binding?.transport ?? 'feishu'
+    return sendToConversation(transport, conversationId, text)
+  }
+
+  // 消息处理（transport 无关）
+  async function handleMessage(msg: IncomingMessage): Promise<void> {
+    const { messageId, conversationId, senderId, transport } = msg
+
     if (isDuplicate(messageId)) return
 
-    // 用户白名单
     if (!isUserAllowed(senderId, config)) {
       log(`拒绝未授权用户: ${senderId}`)
       return
     }
 
+    const send = (text: string) => sendToConversation(transport, conversationId, text)
+
     // 文件消息处理
     if (msg.kind === 'file') {
-      log(`收到文件 [${chatId}] ${senderId}: ${msg.fileName}`)
+      log(`收到文件 [${conversationId}] ${senderId}: ${msg.fileName}`)
 
-      const binding = getBinding(chatId)
+      const binding = getBinding(conversationId)
       if (!binding) {
-        await sendTextMessage(chatId, '请先 /fc 接入对话后再发送文件')
+        await send('请先 /fc 接入对话后再发送文件')
         return
       }
 
-      // 格式校验
-      const category = classifyFile(msg.fileName)
+      const category = classifyFile(msg.fileName!)
       if (category === 'unsupported') {
-        const ext = path.extname(msg.fileName).slice(1).toLowerCase()
-        await sendTextMessage(chatId, `不支持的文件格式: .${ext || '(无扩展名)'}\n支持: 文本文件 (txt/md/json/js/ts/py 等) 和图片 (png/jpg/gif/webp)`)
+        const ext = path.extname(msg.fileName!).slice(1).toLowerCase()
+        await send(`不支持的文件格式: .${ext || '(无扩展名)'}\n支持: 文本文件 (txt/md/json/js/ts/py 等) 和图片 (png/jpg/gif/webp)`)
         return
       }
 
       // 下载到 inbox
+      const adapter = adapters.get(transport)
+      if (!adapter?.downloadMedia) {
+        await send('当前通道不支持文件传输')
+        return
+      }
+
       try {
         const inbox = ensureInbox(binding.cwd)
-        const ext = path.extname(msg.fileName).slice(1).toLowerCase() || 'bin'
+        const ext = path.extname(msg.fileName!).slice(1).toLowerCase() || 'bin'
         const destPath = path.join(inbox, `${messageId}.${ext}`)
 
-        await downloadResource(messageId, msg.fileKey, msg.msgType, destPath)
+        await adapter.downloadMedia(messageId, msg.fileKey!, msg.msgType!, destPath)
 
-        stageFile(chatId, {
+        stageFile(conversationId, {
           filePath: destPath,
-          originalName: msg.fileName,
+          originalName: msg.fileName!,
           category,
           messageId,
           stagedAt: new Date().toISOString(),
         })
 
         const displayName = msg.msgType === 'image' ? '图片' : msg.fileName
-        await sendTextMessage(chatId, `已收到${displayName}，请发送你的指令`)
+        await send(`已收到${displayName}，请发送你的指令`)
       } catch (err) {
-        error(`[file] 下载失败 [${chatId}]: ${err}`)
-        await sendTextMessage(chatId, `文件下载失败: ${err instanceof Error ? err.message : String(err)}`)
+        error(`[file] 下载失败 [${conversationId}]: ${err}`)
+        await send(`文件下载失败: ${err instanceof Error ? err.message : String(err)}`)
       }
       return
     }
 
-    // 以下是文本消息处理 (msg.kind === 'text')
+    // 文本消息处理
     const { text } = msg
-    log(`收到消息 [${chatId}] ${senderId}: ${text.slice(0, 80)}`)
+    log(`收到消息 [${conversationId}] ${senderId}: ${text!.slice(0, 80)}`)
 
-    // 命令解析
-    const cmd = parseCommand(text)
+    const cmd = parseCommand(text!)
 
     if (cmd) {
-      // 控制面命令：直接处理，不入队列
       try {
-        const reply = await handleCommand(cmd, chatId, config)
-        await sendTextMessage(chatId, reply)
+        const reply = await handleCommand(cmd, conversationId, config, transport)
+        await send(reply)
 
-        // /fc 成功接入后，自动发送上下文回顾
         if (cmd.command === 'fc' && cmd.args && config.recapBudget > 0) {
-          const binding = getBinding(chatId)
+          const binding = getBinding(conversationId)
           if (binding) {
             try {
               const recap = buildRecap(binding.sessionId, binding.cwd, config.recapBudget)
-              if (recap) await sendTextMessage(chatId, recap)
+              if (recap) await send(recap)
             } catch (err) {
               log(`[recap] 生成失败: ${err}`)
             }
           }
         }
       } catch (err) {
-        error(`命令执行失败 [${chatId}] /${cmd.command}: ${err}`)
-        await sendTextMessage(chatId, `命令执行失败: ${err instanceof Error ? err.message : String(err)}`)
+        error(`命令执行失败 [${conversationId}] /${cmd.command}: ${err}`)
+        await send(`命令执行失败: ${err instanceof Error ? err.message : String(err)}`)
       }
     } else {
       // 普通消息：入队列发给 Claude
-      const binding = getBinding(chatId)
+      const binding = getBinding(conversationId)
       if (!binding) {
         const registered = listRegistered()
         const lines = ['当前未接入任何对话。']
@@ -171,23 +192,23 @@ export async function startDaemon(): Promise<void> {
           }
         }
         lines.push('', '发 /fc <名称> 接入，或 /fn <名称> 新建')
-        await sendTextMessage(chatId, lines.join('\n'))
+        await send(lines.join('\n'))
         return
       }
 
-      // 独占检查：如果 session 正在电脑端 tmux 中使用，自动解绑飞书端
+      // 独占检查：如果 session 正在电脑端 tmux 中使用，自动解绑远程端
       const regEntry = listRegistered().find(r => r.sessionId === binding.sessionId)
       if (regEntry && isSessionLocallyActive(regEntry.name)) {
-        archiveBinding(chatId)
-        log(`[${chatId}] 检测到 "${regEntry.name}" 在电脑端活跃，自动解绑飞书`)
-        await sendTextMessage(chatId,
-          `"${regEntry.name}" 正在电脑端使用，已自动断开飞书端。\n\n等电脑端关闭后，发 /fc ${regEntry.name} 重新接入。`)
+        archiveBinding(conversationId)
+        log(`[${conversationId}] 检测到 "${regEntry.name}" 在电脑端活跃，自动解绑`)
+        await send(
+          `"${regEntry.name}" 正在电脑端使用，已自动断开。\n\n等电脑端关闭后，发 /fc ${regEntry.name} 重新接入。`)
         return
       }
 
       // 合并暂存文件
-      const staged = consumeStaged(chatId)
-      let prompt = text
+      const staged = consumeStaged(conversationId)
+      let prompt = text!
       if (staged && staged.length > 0) {
         const fileRefs = staged.map(f => {
           const label = f.category === 'image' ? '图片' : `文件 (${f.originalName})`
@@ -202,45 +223,73 @@ export async function startDaemon(): Promise<void> {
       }
 
       enqueue(
-        chatId,
+        conversationId,
         prompt,
-        (reply) => sendTextMessage(chatId, reply),
+        (reply) => send(reply),
         config.defaultTimeoutSeconds,
       )
     }
   }
 
-  // 启动飞书连接
-  await startFeishu(config, handleMessage)
+  // --- 初始化 transports ---
 
-  // 恢复上次中断的任务和排队消息
-  await recoverOnStartup(
-    (groupId, text) => sendTextMessage(groupId, text),
-    (groupId) => (text: string) => sendTextMessage(groupId, text),
-    config.defaultTimeoutSeconds,
-  )
-
-  // 发送重启通知
-  for (const binding of activeBindings) {
+  // 飞书
+  if (config.feishu.appId) {
     try {
-      await sendTextMessage(binding.feishuGroupId,
-        `🔄 im2cc 已重启\n📁 ${binding.cwd}\n🔑 Session: ${binding.sessionId}\n⚙️ 模式: ${binding.permissionMode}`)
-    } catch {
-      // 群可能已被删除，忽略
+      const feishu = new FeishuAdapter(config)
+      adapters.set('feishu', feishu)
+      await feishu.start(handleMessage)
+      log('[transport] 飞书已启动')
+    } catch (err) {
+      error(`[transport] 飞书启动失败: ${err}`)
     }
   }
 
-  // 启动时清理过期 inbox 文件
+  // 微信（如果已配置）
+  const wechatAccount = loadWeChatAccount()
+  if (wechatAccount?.botToken) {
+    try {
+      // 动态导入，未安装时不影响飞书
+      const { WeChatAdapter } = await import('./wechat.js')
+      const wechat = new WeChatAdapter(wechatAccount)
+      adapters.set('wechat', wechat)
+      await wechat.start(handleMessage)
+      log('[transport] 微信已启动')
+    } catch (err) {
+      error(`[transport] 微信启动失败: ${err}`)
+    }
+  }
+
+  if (adapters.size === 0) {
+    error('没有可用的 transport，请先配置飞书 (im2cc setup) 或微信 (im2cc wechat login)')
+  }
+
+  // 恢复上次中断的任务
+  await recoverOnStartup(
+    (conversationId, text) => sendByConversationId(conversationId, text),
+    (conversationId) => (text: string) => sendByConversationId(conversationId, text),
+    config.defaultTimeoutSeconds,
+  )
+
+  // 发送重启通知（仅飞书，微信不支持主动推送）
+  for (const binding of activeBindings) {
+    if (binding.transport === 'feishu' || !binding.transport) {
+      try {
+        await sendToConversation('feishu', binding.conversationId,
+          `🔄 im2cc 已重启\n📁 ${binding.cwd}\n🔑 Session: ${binding.sessionId}\n⚙️ 模式: ${binding.permissionMode}`)
+      } catch { /* 群可能已被删除 */ }
+    }
+  }
+
+  // inbox 清理
   const allCwds = listActiveBindings().map(b => b.cwd)
   runInboxCleanup(allCwds, config.inboxTtlMinutes)
-
-  // 定时清理 inbox（每 10 分钟）
   setInterval(() => {
     const cwds = listActiveBindings().map(b => b.cwd)
     runInboxCleanup(cwds, config.inboxTtlMinutes)
   }, 10 * 60 * 1000)
 
-  log(`im2cc 已启动，${activeBindings.length} 个活跃绑定`)
+  log(`im2cc 已启动，${adapters.size} 个 transport，${activeBindings.length} 个活跃绑定`)
 }
 
 // 被 fork() 或 node 直接执行时，自动启动 daemon

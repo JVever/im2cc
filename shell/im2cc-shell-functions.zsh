@@ -100,8 +100,8 @@ sys.exit(2)  # missing
 " 2>/dev/null
 }
 
-# 解绑飞书端：归档绑定 + 通知飞书群
-_im2cc_release_feishu() {
+# 解绑远程端：归档绑定 + 通知对应 IM
+_im2cc_release_remote() {
   local session_id="$1" session_name="$2"
   local bindings_file="$HOME/.im2cc/data/bindings.json"
   [[ -f "$bindings_file" ]] || return
@@ -112,51 +112,55 @@ import json, os, sys
 bindings = json.load(open('$bindings_file'))
 config_file = os.path.expanduser('~/.im2cc/config.json')
 changed = False
-group_id = None
+feishu_groups = []
 
 for b in bindings:
-    if b.get('sessionId') == '$session_id' and not b.get('archived'):
+    # 兼容旧格式
+    sid = b.get('sessionId', '')
+    conv = b.get('conversationId', b.get('feishuGroupId', ''))
+    transport = b.get('transport', 'feishu')
+    if sid == '$session_id' and not b.get('archived'):
         b['archived'] = True
-        group_id = b.get('feishuGroupId')
         changed = True
+        if transport == 'feishu' and conv:
+            feishu_groups.append(conv)
+        print(f'已解绑 {transport} ({conv})')
 
 if changed:
     tmp = '$bindings_file' + '.tmp'
     json.dump(bindings, open(tmp, 'w'), indent=2)
     os.rename(tmp, '$bindings_file')
-    print(f'已解绑飞书 ({group_id})')
 
-    # 通知飞书群
-    if group_id and os.path.exists(config_file):
-        try:
-            config = json.load(open(config_file))
-            app_id = config.get('feishu', {}).get('appId', '')
-            app_secret = config.get('feishu', {}).get('appSecret', '')
-            if app_id and app_secret:
-                import urllib.request
-                # 获取 token
-                token_req = urllib.request.Request(
-                    'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal',
-                    data=json.dumps({'app_id': app_id, 'app_secret': app_secret}).encode(),
-                    headers={'Content-Type': 'application/json'},
-                )
-                token_resp = json.loads(urllib.request.urlopen(token_req, timeout=5).read())
-                token = token_resp.get('tenant_access_token', '')
-
-                if token:
-                    # 发消息
-                    msg_req = urllib.request.Request(
-                        'https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id',
-                        data=json.dumps({
-                            'receive_id': group_id,
-                            'msg_type': 'text',
-                            'content': json.dumps({'text': f'🔄 \"{session_name}\" 已转到电脑端'})
-                        }).encode(),
-                        headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {token}'},
+    # 通知飞书群（微信不支持主动推送，跳过）
+    for group_id in feishu_groups:
+        if os.path.exists(config_file):
+            try:
+                config = json.load(open(config_file))
+                app_id = config.get('feishu', {}).get('appId', '')
+                app_secret = config.get('feishu', {}).get('appSecret', '')
+                if app_id and app_secret:
+                    import urllib.request
+                    token_req = urllib.request.Request(
+                        'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal',
+                        data=json.dumps({'app_id': app_id, 'app_secret': app_secret}).encode(),
+                        headers={'Content-Type': 'application/json'},
                     )
-                    urllib.request.urlopen(msg_req, timeout=5)
-        except Exception:
-            pass  # 通知失败不影响主流程
+                    token_resp = json.loads(urllib.request.urlopen(token_req, timeout=5).read())
+                    token = token_resp.get('tenant_access_token', '')
+
+                    if token:
+                        msg_req = urllib.request.Request(
+                            'https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id',
+                            data=json.dumps({
+                                'receive_id': group_id,
+                                'msg_type': 'text',
+                                'content': json.dumps({'text': f'🔄 \"{session_name}\" 已转到电脑端'})
+                            }).encode(),
+                            headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {token}'},
+                        )
+                        urllib.request.urlopen(msg_req, timeout=5)
+            except Exception:
+                pass  # 通知失败不影响主流程
 " 2>/dev/null
 }
 
@@ -316,7 +320,7 @@ else:
     echo "✅ 已注册 \"$new_name\" → $(basename "$cwd") [$session_id]"
 
     local tmux_name="${_IM2CC_TMUX_PREFIX}${new_name}"
-    _im2cc_release_feishu "$session_id" "$new_name"
+    _im2cc_release_remote "$session_id" "$new_name"
 
     tmux new-session -d -s "$tmux_name" -c "$cwd" \
       "claude $session_flag $session_id --dangerously-skip-permissions --name 'im2cc:${new_name}'"
@@ -335,7 +339,7 @@ else:
   local tmux_name="${_IM2CC_TMUX_PREFIX}${name}"
 
   # 独占：解绑飞书端（如果该 session 正被飞书使用）
-  _im2cc_release_feishu "$session_id" "$name"
+  _im2cc_release_remote "$session_id" "$name"
 
   # 如果 tmux session 已存在，直接 attach
   if tmux has-session -t "$tmux_name" 2>/dev/null; then

@@ -17,7 +17,7 @@ import { log } from './logger.js'
 type JobState = 'idle' | 'busy' | 'cancelling'
 
 interface QueuedMessage {
-  groupId: string
+  conversationId: string
   text: string
   resolve: (result: string) => void
   reject: (err: Error) => void
@@ -33,7 +33,7 @@ interface GroupState {
 // --- 持久化：pending 队列 ---
 
 interface PendingEntry {
-  groupId: string
+  conversationId: string
   text: string
 }
 
@@ -41,7 +41,7 @@ function savePending(): void {
   const entries: PendingEntry[] = []
   for (const [, group] of groups) {
     for (const msg of group.queue) {
-      entries.push({ groupId: msg.groupId, text: msg.text })
+      entries.push({ conversationId: msg.conversationId, text: msg.text })
     }
   }
   const file = getPendingFile()
@@ -69,7 +69,7 @@ function clearPending(): void {
 
 interface InflightMeta {
   id: string
-  groupId: string
+  conversationId: string
   sessionId: string
   text: string
   pid: number | null
@@ -77,11 +77,11 @@ interface InflightMeta {
   outputFile: string
 }
 
-function createInflight(groupId: string, sessionId: string, text: string): InflightMeta {
+function createInflight(conversationId: string, sessionId: string, text: string): InflightMeta {
   const id = crypto.randomUUID()
   const dir = getInflightDir()
   const meta: InflightMeta = {
-    id, groupId, sessionId, text,
+    id, conversationId, sessionId, text,
     pid: null,
     startedAt: new Date().toISOString(),
     outputFile: `${id}.output`,
@@ -110,26 +110,26 @@ function cleanupInflight(id: string): void {
 
 const groups = new Map<string, GroupState>()
 
-function getGroup(groupId: string): GroupState {
-  let g = groups.get(groupId)
+function getGroup(conversationId: string): GroupState {
+  let g = groups.get(conversationId)
   if (!g) {
     g = { state: 'idle', currentChild: null, queue: [], timeoutTimer: null }
-    groups.set(groupId, g)
+    groups.set(conversationId, g)
   }
   return g
 }
 
 /** 将普通消息入队 */
 export function enqueue(
-  groupId: string,
+  conversationId: string,
   text: string,
   sendReply: (text: string) => Promise<void>,
   timeoutSeconds: number,
 ): void {
-  const group = getGroup(groupId)
+  const group = getGroup(conversationId)
 
   const promise = new Promise<string>((resolve, reject) => {
-    group.queue.push({ groupId, text, resolve, reject })
+    group.queue.push({ conversationId, text, resolve, reject })
     savePending()
   })
 
@@ -140,7 +140,7 @@ export function enqueue(
 
   // 如果空闲，立即处理
   if (group.state === 'idle') {
-    processNext(groupId, sendReply, timeoutSeconds)
+    processNext(conversationId, sendReply, timeoutSeconds)
   }
 
   // 结果回传飞书（如果已经流式发送过了，result 为空，跳过）
@@ -150,11 +150,11 @@ export function enqueue(
 
 /** 处理队列中的下一条消息 */
 async function processNext(
-  groupId: string,
+  conversationId: string,
   sendReply: (text: string) => Promise<void>,
   timeoutSeconds: number,
 ): Promise<void> {
-  const group = getGroup(groupId)
+  const group = getGroup(conversationId)
   const msg = group.queue.shift()
   savePending()
 
@@ -163,25 +163,25 @@ async function processNext(
     return
   }
 
-  const binding = getBinding(groupId)
+  const binding = getBinding(conversationId)
   if (!binding) {
     msg.reject(new Error('该群未接入对话，请先 /fc <名称> 或 /fn <名称>'))
-    processNext(groupId, sendReply, timeoutSeconds)
+    processNext(conversationId, sendReply, timeoutSeconds)
     return
   }
 
   group.state = 'busy'
-  log(`[${groupId}] 开始执行: ${msg.text.slice(0, 50)}...`)
+  log(`[${conversationId}] 开始执行: ${msg.text.slice(0, 50)}...`)
 
   // 创建 inflight 记录
-  const inflight = createInflight(groupId, binding.sessionId, msg.text)
+  const inflight = createInflight(conversationId, binding.sessionId, msg.text)
   const outputFile = path.join(getInflightDir(), inflight.outputFile)
 
   // 超时计时
   group.timeoutTimer = setTimeout(() => {
     if (group.state === 'busy' && group.currentChild) {
-      log(`[${groupId}] 执行超时 (${timeoutSeconds}s)，中断`)
-      handleStop(groupId)
+      log(`[${conversationId}] 执行超时 (${timeoutSeconds}s)，中断`)
+      handleStop(conversationId)
       msg.reject(new Error(`执行超时 (${Math.floor(timeoutSeconds / 60)}分钟)，已中断`))
     }
   }, timeoutSeconds * 1000)
@@ -207,7 +207,7 @@ async function processNext(
       },
     )
 
-    updateBinding(groupId, { turnCount: binding.turnCount + 1 })
+    updateBinding(conversationId, { turnCount: binding.turnCount + 1 })
     // 如果已经流式发送过，不再重复发最终累积文本
     msg.resolve(streamed ? '' : formatOutput(output, binding.sessionId))
   } catch (err) {
@@ -220,14 +220,14 @@ async function processNext(
     group.state = 'idle'
     // 继续处理队列
     if (group.queue.length > 0) {
-      processNext(groupId, sendReply, timeoutSeconds)
+      processNext(conversationId, sendReply, timeoutSeconds)
     }
   }
 }
 
 /** /stop — 中断当前任务（控制面，不入队列） */
-export async function handleStop(groupId: string): Promise<string> {
-  const group = getGroup(groupId)
+export async function handleStop(conversationId: string): Promise<string> {
+  const group = getGroup(conversationId)
   if (group.state !== 'busy' || !group.currentChild) {
     return '当前没有执行中的任务'
   }
@@ -238,15 +238,15 @@ export async function handleStop(groupId: string): Promise<string> {
 }
 
 /** 获取群的当前状态 */
-export function getQueueStatus(groupId: string): { state: JobState; queueLength: number } {
-  const group = getGroup(groupId)
+export function getQueueStatus(conversationId: string): { state: JobState; queueLength: number } {
+  const group = getGroup(conversationId)
   return { state: group.state, queueLength: group.queue.length }
 }
 
 /** 启动时恢复：发送上次未完成的 inflight 结果 + 重新入队 pending 消息 */
 export async function recoverOnStartup(
-  sendToGroup: (groupId: string, text: string) => Promise<void>,
-  makeSendReply: (groupId: string) => (text: string) => Promise<void>,
+  sendToGroup: (conversationId: string, text: string) => Promise<void>,
+  makeSendReply: (conversationId: string) => (text: string) => Promise<void>,
   timeoutSeconds: number,
 ): Promise<void> {
   // 1. 恢复 inflight 任务的结果
@@ -269,10 +269,10 @@ export async function recoverOnStartup(
       }
 
       if (resultText) {
-        await sendToGroup(meta.groupId, formatOutput(resultText, meta.sessionId))
+        await sendToGroup(meta.conversationId, formatOutput(resultText, meta.sessionId))
         log(`[recovery] 已发送 "${meta.text.slice(0, 30)}..." 的结果`)
       } else {
-        await sendToGroup(meta.groupId,
+        await sendToGroup(meta.conversationId,
           `⚠️ 上次任务因守护进程重启被中断，未能获取结果。\n原始消息: "${meta.text.slice(0, 80)}"\n请重新发送。`)
         log(`[recovery] 任务 "${meta.text.slice(0, 30)}..." 无结果，已通知`)
       }
@@ -291,7 +291,7 @@ export async function recoverOnStartup(
     log(`[recovery] 恢复 ${pending.length} 条待处理消息`)
     clearPending()
     for (const entry of pending) {
-      enqueue(entry.groupId, entry.text, makeSendReply(entry.groupId), timeoutSeconds)
+      enqueue(entry.conversationId, entry.text, makeSendReply(entry.conversationId), timeoutSeconds)
     }
   }
 }

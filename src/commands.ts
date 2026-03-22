@@ -6,8 +6,9 @@
 
 import path from 'node:path'
 import type { Im2ccConfig } from './config.js'
+import type { TransportType } from './transport.js'
 import { validatePath, resolvePath, listProjects } from './security.js'
-import { createBinding, getBinding, archiveBinding, updateBinding } from './session.js'
+import { createBinding, getBinding, archiveBinding, archiveBindingsBySession, updateBinding } from './session.js'
 import { createSession, getClaudeVersion, killLocalSession } from './claude-driver.js'
 import { handleStop, getQueueStatus } from './queue.js'
 import { discoverSessions, findSession } from './discover.js'
@@ -32,24 +33,25 @@ export function parseCommand(text: string): ParsedCommand | null {
 
 export async function handleCommand(
   cmd: ParsedCommand,
-  groupId: string,
+  conversationId: string,
   config: Im2ccConfig,
+  transport: TransportType = 'feishu',
 ): Promise<string> {
   switch (cmd.command) {
-    case 'fn': return handleFn(cmd.args, groupId, config)
-    case 'fc': return handleFc(cmd.args, groupId, config)
+    case 'fn': return handleFn(cmd.args, conversationId, config, transport)
+    case 'fc': return handleFc(cmd.args, conversationId, config, transport)
     case 'fl': return handleFl()
-    case 'fk': return handleFk(cmd.args, groupId)
-    case 'fs': return handleFs(groupId)
-    case 'fd': return handleFd(groupId)
-    case 'mode': return handleMode(cmd.args, groupId)
-    case 'stop': return handleStop(groupId)
+    case 'fk': return handleFk(cmd.args, conversationId)
+    case 'fs': return handleFs(conversationId)
+    case 'fd': return handleFd(conversationId)
+    case 'mode': return handleMode(cmd.args, conversationId)
+    case 'stop': return handleStop(conversationId)
     case 'help': return handleHelp()
     default: return `未知命令: /${cmd.command}`
   }
 }
 
-async function handleFn(args: string, groupId: string, config: Im2ccConfig): Promise<string> {
+async function handleFn(args: string, conversationId: string, config: Im2ccConfig, transport: TransportType = 'feishu'): Promise<string> {
   // 用法: /bind <名称> <项目>  — 创建新对话并注册
   // 或:   /bind <名称>         — 如果名称就是项目目录名
   // 或:   /bind                — 列出可用项目
@@ -60,7 +62,7 @@ async function handleFn(args: string, groupId: string, config: Im2ccConfig): Pro
     return `📁 可用项目:\n${list}\n\n用法: /fn <对话名称> [项目名]\n例如: /fn auth-refactor im2cc`
   }
 
-  const existing = getBinding(groupId)
+  const existing = getBinding(conversationId)
   if (existing) {
     return `该群已连接到 "${path.basename(existing.cwd)}"\n先 /fd 再操作`
   }
@@ -74,7 +76,7 @@ async function handleFn(args: string, groupId: string, config: Im2ccConfig): Pro
   const validation = validatePath(resolved, config)
   if (!validation.valid) return `❌ ${validation.error}`
 
-  log(`[${groupId}] 创建新对话 "${sessionName}" → ${validation.resolvedPath}`)
+  log(`[${conversationId}] 创建新对话 "${sessionName}" → ${validation.resolvedPath}`)
 
   try {
     const cliVersion = getClaudeVersion()
@@ -83,7 +85,7 @@ async function handleFn(args: string, groupId: string, config: Im2ccConfig): Pro
     // 注册到 registry
     register(sessionName, sessionId, validation.resolvedPath)
 
-    const binding = createBinding(groupId, sessionId, validation.resolvedPath, config.defaultPermissionMode, cliVersion)
+    const binding = createBinding(conversationId, sessionId, validation.resolvedPath, config.defaultPermissionMode, cliVersion, transport)
 
     return [
       `✅ 新对话 "${sessionName}"`,
@@ -97,8 +99,8 @@ async function handleFn(args: string, groupId: string, config: Im2ccConfig): Pro
   }
 }
 
-async function handleFc(args: string, groupId: string, config: Im2ccConfig): Promise<string> {
-  const existing = getBinding(groupId)
+async function handleFc(args: string, conversationId: string, config: Im2ccConfig, transport: TransportType = 'feishu'): Promise<string> {
+  const existing = getBinding(conversationId)
   if (existing) {
     return `该群已连接，先 /fd 再 /fc`
   }
@@ -113,7 +115,7 @@ async function handleFc(args: string, groupId: string, config: Im2ccConfig): Pro
   // 双参数模式: /fc <新名称> <session-query>
   // 注册一个未注册的对话并接入
   if (parts.length >= 2) {
-    return handleFcRegisterAndConnect(parts[0], parts.slice(1).join(' '), groupId, config)
+    return handleFcRegisterAndConnect(parts[0], parts.slice(1).join(' '), conversationId, config, transport)
   }
 
   // 单参数模式: /fc <名称>
@@ -122,7 +124,7 @@ async function handleFc(args: string, groupId: string, config: Im2ccConfig): Pro
   // 优先从注册表查找
   const reg = lookup(query)
   if (reg) {
-    return connectToRegistered(reg, groupId, config)
+    return connectToRegistered(reg, conversationId, config, transport)
   }
 
   // 注册表没有，尝试模糊搜索注册表
@@ -135,7 +137,7 @@ async function handleFc(args: string, groupId: string, config: Im2ccConfig): Pro
   // 最后尝试文件系统扫描（单参数时用 query 作为注册名）
   const discovered = await findSession(query)
   if (discovered.length === 1) {
-    return connectToDiscovered(query, discovered[0], groupId, config)
+    return connectToDiscovered(query, discovered[0], conversationId, config, transport)
   }
 
   if (discovered.length > 1) {
@@ -187,15 +189,18 @@ async function listAvailableSessions(): Promise<string> {
 /** 接入已注册对话 */
 function connectToRegistered(
   reg: { name: string; sessionId: string; cwd: string; permissionMode?: string },
-  groupId: string,
+  conversationId: string,
   config: Im2ccConfig,
+  transport: TransportType = 'feishu',
 ): string {
   const killed = killLocalSession(reg.name)
+  // 跨 transport 独占：归档其他 transport 对同一 session 的绑定
+  archiveBindingsBySession(reg.sessionId, conversationId)
   const cliVersion = getClaudeVersion()
   touch(reg.name)
   const mode = reg.permissionMode ?? config.defaultPermissionMode
-  const binding = createBinding(groupId, reg.sessionId, reg.cwd, mode, cliVersion)
-  log(`[${groupId}] attach → "${reg.name}" (${reg.sessionId})${killed ? ' [已关闭本地进程]' : ''}`)
+  const binding = createBinding(conversationId, reg.sessionId, reg.cwd, mode, cliVersion, transport)
+  log(`[${conversationId}] attach → "${reg.name}" (${reg.sessionId})${killed ? ' [已关闭本地进程]' : ''}`)
 
   const modeWarning = binding.permissionMode === 'YOLO'
     ? '⚠️ 当前为 YOLO 模式（自动执行所有操作）\n   切换: /mode default'
@@ -215,13 +220,15 @@ function connectToRegistered(
 function connectToDiscovered(
   name: string,
   session: { sessionId: string; name: string; projectPath: string; projectName: string },
-  groupId: string,
+  conversationId: string,
   config: Im2ccConfig,
+  transport: TransportType = 'feishu',
 ): string {
   const cliVersion = getClaudeVersion()
-  const binding = createBinding(groupId, session.sessionId, session.projectPath, config.defaultPermissionMode, cliVersion)
+  archiveBindingsBySession(session.sessionId, conversationId)
+  const binding = createBinding(conversationId, session.sessionId, session.projectPath, config.defaultPermissionMode, cliVersion, transport)
   register(name, session.sessionId, session.projectPath)
-  log(`[${groupId}] attach (discovered) → "${name}" (${session.sessionId})`)
+  log(`[${conversationId}] attach (discovered) → "${name}" (${session.sessionId})`)
 
   const modeWarning = binding.permissionMode === 'YOLO'
     ? '⚠️ 当前为 YOLO 模式（自动执行所有操作）\n   切换: /mode default'
@@ -240,8 +247,9 @@ function connectToDiscovered(
 async function handleFcRegisterAndConnect(
   name: string,
   sessionQuery: string,
-  groupId: string,
+  conversationId: string,
   config: Im2ccConfig,
+  transport: TransportType = 'feishu',
 ): Promise<string> {
   // 检查名称是否已被占用
   const existingReg = lookup(name)
@@ -268,11 +276,11 @@ async function handleFcRegisterAndConnect(
     return `该对话已注册为 "${alreadyRegistered.name}"\n直接 /fc ${alreadyRegistered.name} 接入`
   }
 
-  return connectToDiscovered(name, discovered[0], groupId, config)
+  return connectToDiscovered(name, discovered[0], conversationId, config, transport)
 }
 
-function handleFd(groupId: string): string {
-  const binding = archiveBinding(groupId)
+function handleFd(conversationId: string): string {
+  const binding = archiveBinding(conversationId)
   if (!binding) return '该群未绑定任何 session'
 
   const projectName = path.basename(binding.cwd)
@@ -297,7 +305,7 @@ export const MODE_TO_CLI: Record<string, string> = {
   'auto-edit': 'acceptEdits',
 }
 
-function handleMode(args: string, groupId: string): string {
+function handleMode(args: string, conversationId: string): string {
   const normalized = MODE_MAP[args.toLowerCase()]
   if (!args || !normalized) {
     return '用法: /mode <模式>\n\n' +
@@ -307,10 +315,10 @@ function handleMode(args: string, groupId: string): string {
       '💡 需要 Claude 先规划再执行？直接说"先给我计划，确认后再做"'
   }
 
-  const binding = getBinding(groupId)
+  const binding = getBinding(conversationId)
   if (!binding) return '该群未绑定，请先 /fc 或 /fn'
 
-  updateBinding(groupId, { permissionMode: normalized })
+  updateBinding(conversationId, { permissionMode: normalized })
 
   // 同步更新 registry，下次 /fc 接入时记住此模式
   const regEntry = listRegistered().find(r => r.sessionId === binding.sessionId)
@@ -331,7 +339,7 @@ function handleFl(): string {
   return `📋 已注册的对话:\n${lines.join('\n')}`
 }
 
-function handleFk(args: string, groupId: string): string {
+function handleFk(args: string, conversationId: string): string {
   if (!args) return '用法: /fk <名称>'
 
   const session = lookup(args)
@@ -341,9 +349,9 @@ function handleFk(args: string, groupId: string): string {
   killLocalSession(session.name)
 
   // 如果飞书绑定了这个 session，解绑
-  const binding = getBinding(groupId)
+  const binding = getBinding(conversationId)
   if (binding && binding.sessionId === session.sessionId) {
-    archiveBinding(groupId)
+    archiveBinding(conversationId)
   }
 
   remove(args)
@@ -354,11 +362,11 @@ function handleFk(args: string, groupId: string): string {
   ].join('\n')
 }
 
-async function handleFnNew(args: string, groupId: string, config: Im2ccConfig): Promise<string> {
+async function handleFnNew(args: string, conversationId: string, config: Im2ccConfig, transport: TransportType = 'feishu'): Promise<string> {
   // /new <名称> [项目]
   if (!args) return '用法: /new <对话名称> [项目名]'
 
-  const old = archiveBinding(groupId)
+  const old = archiveBinding(conversationId)
   const parts = args.split(/\s+/)
   const sessionName = parts[0]
   const projectHint = parts[1] || (old ? path.basename(old.cwd) : sessionName)
@@ -372,7 +380,7 @@ async function handleFnNew(args: string, groupId: string, config: Im2ccConfig): 
     const { sessionId } = await createSession(validation.resolvedPath, config.defaultPermissionMode, sessionName)
 
     register(sessionName, sessionId, validation.resolvedPath)
-    const binding = createBinding(groupId, sessionId, validation.resolvedPath, config.defaultPermissionMode, cliVersion)
+    const binding = createBinding(conversationId, sessionId, validation.resolvedPath, config.defaultPermissionMode, cliVersion, transport)
 
     const lines = ['✅ 新对话已创建']
     if (old) lines.push(`旧对话仍可通过 /fc 恢复`)
@@ -389,11 +397,11 @@ async function handleFnNew(args: string, groupId: string, config: Im2ccConfig): 
   }
 }
 
-function handleFs(groupId: string): string {
-  const binding = getBinding(groupId)
+function handleFs(conversationId: string): string {
+  const binding = getBinding(conversationId)
   if (!binding) return '该群未绑定任何 session'
 
-  const qs = getQueueStatus(groupId)
+  const qs = getQueueStatus(conversationId)
   const projectName = path.basename(binding.cwd)
 
   return [

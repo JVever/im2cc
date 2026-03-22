@@ -1,22 +1,24 @@
 /**
- * @input:    Claude CLI stream-json 文本输出
- * @output:   formatOutput(), formatError() — CLI 输出 → 飞书可发送的文本
+ * @input:    Claude CLI stream-json 文本输出, TransportType
+ * @output:   formatOutput(), formatError() — CLI 输出 → IM 可发送的文本
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
-const MAX_FEISHU_MSG_LENGTH = 28000 // 留 2KB 余量，飞书上限约 30KB
+import { MSG_LENGTH_LIMIT, type TransportType } from './transport.js'
 
-export function formatOutput(text: string, sessionId: string): string {
+export function formatOutput(text: string, sessionId: string, transport: TransportType = 'feishu'): string {
   if (!text || text === '(无输出)') {
     return '(Claude Code 无输出)'
   }
 
-  if (text.length <= MAX_FEISHU_MSG_LENGTH) {
+  const maxLen = MSG_LENGTH_LIMIT[transport] ?? 28000
+
+  if (text.length <= maxLen) {
     return text
   }
 
   // 超长截断
-  const truncated = text.slice(0, MAX_FEISHU_MSG_LENGTH)
+  const truncated = text.slice(0, maxLen)
   const suffix = [
     '',
     '---',

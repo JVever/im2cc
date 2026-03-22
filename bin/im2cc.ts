@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { execSync, fork } from 'node:child_process'
-import { loadConfig, saveConfig, configExists, getPidFile, getLogDir, getConfigDir, type Im2ccConfig } from '../src/config.js'
+import { loadConfig, saveConfig, configExists, getPidFile, getLogDir, getConfigDir, loadWeChatAccount, saveWeChatAccount, getWeChatAccountFile, type Im2ccConfig } from '../src/config.js'
 import { listActiveBindings } from '../src/session.js'
 import { getClaudeVersion, createSession, checkSessionFile } from '../src/claude-driver.js'
 import { register, lookup, listRegistered } from '../src/registry.js'
@@ -30,6 +30,7 @@ switch (command) {
   case 'setup': await cmdSetup(); break
   case 'install-service': cmdInstallService(); break
   case 'doctor': cmdDoctor(); break
+  case 'wechat': await cmdWeChat(); break
   default:
     console.log(`im2cc — IM to Claude Code
 
@@ -47,8 +48,13 @@ switch (command) {
   status             查看运行状态
   logs               查看日志
 
+微信:
+  wechat login       扫码绑定微信 ClawBot
+  wechat status      查看微信连接状态
+  wechat logout      解除微信绑定
+
 运维:
-  sessions           列出飞书活跃绑定
+  sessions           列出活跃绑定
   install-service    安装 macOS 开机自启
   doctor             检查环境
 `)
@@ -234,30 +240,31 @@ async function cmdOpen(): Promise<void> {
     return
   }
 
-  // 独占：解绑飞书端
+  // 独占：解绑远程端
   const bindings = listActiveBindings()
-  const feishuBinding = bindings.find(b => b.sessionId === session.sessionId)
-  if (feishuBinding) {
-    // 归档飞书绑定
+  const remoteBinding = bindings.find(b => b.sessionId === session.sessionId)
+  if (remoteBinding) {
     const { archiveBinding } = await import('../src/session.js')
-    archiveBinding(feishuBinding.feishuGroupId)
+    archiveBinding(remoteBinding.conversationId)
 
-    // 尝试通知飞书群
-    try {
-      const config = loadConfig()
-      const lark = await import('@larksuiteoapi/node-sdk')
-      const client = new lark.Client({ appId: config.feishu.appId, appSecret: config.feishu.appSecret })
-      await client.im.message.create({
-        params: { receive_id_type: 'chat_id' },
-        data: {
-          receive_id: feishuBinding.feishuGroupId,
-          msg_type: 'text',
-          content: JSON.stringify({ text: `🔄 对话 "${session.name}" 已转移到电脑端` }),
-        },
-      })
-    } catch { /* 通知失败不影响主流程 */ }
+    // 飞书端尝试通知
+    if (remoteBinding.transport === 'feishu' || !remoteBinding.transport) {
+      try {
+        const config = loadConfig()
+        const lark = await import('@larksuiteoapi/node-sdk')
+        const client = new lark.Client({ appId: config.feishu.appId, appSecret: config.feishu.appSecret })
+        await client.im.message.create({
+          params: { receive_id_type: 'chat_id' },
+          data: {
+            receive_id: remoteBinding.conversationId,
+            msg_type: 'text',
+            content: JSON.stringify({ text: `🔄 对话 "${session.name}" 已转移到电脑端` }),
+          },
+        })
+      } catch { /* 通知失败不影响主流程 */ }
+    }
 
-    console.log(`🔄 已从飞书端断开 "${session.name}"`)
+    console.log(`🔄 已从${remoteBinding.transport ?? 'feishu'}端断开 "${session.name}"`)
   }
 
   // 在 tmux 中打开
@@ -424,4 +431,85 @@ function cmdDoctor(): void {
   } else {
     console.log('守护进程: ⬤ 未运行')
   }
+
+  // 微信
+  const wechatAccount = loadWeChatAccount()
+  console.log(`微信 ClawBot: ${wechatAccount?.botToken ? '✅ 已绑定' : '⬤ 未绑定 (im2cc wechat login)'}`)
+}
+
+async function cmdWeChat(): Promise<void> {
+  const sub = process.argv[3]
+
+  if (sub === 'login') {
+    const { getQRCode, pollQRCodeStatus } = await import('../src/wechat.js')
+    const qrcodeTerminal = (await import('qrcode-terminal')).default
+
+    console.log('正在获取微信 ClawBot QR 码...')
+    const { qrcode, qrcodeUrl } = await getQRCode()
+
+    // 渲染 QR 码到终端
+    const qrContent = qrcodeUrl || qrcode
+    console.log('\n请用微信扫描以下 QR 码:\n')
+    qrcodeTerminal.generate(qrContent, { small: true })
+
+    console.log('\n等待扫码确认...')
+    const maxAttempts = 30
+    for (let i = 0; i < maxAttempts; i++) {
+      const result = await pollQRCodeStatus(qrcode)
+      if (result) {
+        saveWeChatAccount({
+          botToken: result.botToken,
+          baseUrl: result.baseUrl,
+          ilinkBotId: result.ilinkBotId,
+          ilinkUserId: result.ilinkUserId,
+          savedAt: new Date().toISOString(),
+          lastOkAt: new Date().toISOString(),
+          syncBuf: '',
+        })
+        console.log(`\n✅ 微信 ClawBot 已绑定`)
+        console.log(`   Bot ID: ${result.ilinkBotId}`)
+        console.log(`   重启守护进程生效: im2cc stop && im2cc start`)
+        return
+      }
+      // pollQRCodeStatus 自身有超时，无需额外 sleep
+    }
+    console.log('\n❌ 扫码超时，请重试')
+    return
+  }
+
+  if (sub === 'status') {
+    const account = loadWeChatAccount()
+    if (!account?.botToken) {
+      console.log('微信 ClawBot: 未绑定')
+      console.log('运行 im2cc wechat login 绑定')
+      return
+    }
+    console.log('微信 ClawBot:')
+    console.log(`  Bot ID: ${account.ilinkBotId || '(未知)'}`)
+    console.log(`  Base URL: ${account.baseUrl}`)
+    console.log(`  绑定时间: ${account.savedAt}`)
+    console.log(`  最后活跃: ${account.lastOkAt}`)
+    console.log(`  Token: ****${account.botToken.slice(-8)}`)
+    return
+  }
+
+  if (sub === 'logout') {
+    const accountFile = getWeChatAccountFile()
+    if (fs.existsSync(accountFile)) {
+      fs.unlinkSync(accountFile)
+      console.log('✅ 已解除微信 ClawBot 绑定')
+      console.log('   重启守护进程生效: im2cc stop && im2cc start')
+    } else {
+      console.log('微信 ClawBot 未绑定')
+    }
+    return
+  }
+
+  console.log(`微信 ClawBot 管理
+
+用法: im2cc wechat <command>
+
+  login    扫码绑定微信 ClawBot
+  status   查看连接状态
+  logout   解除绑定`)
 }

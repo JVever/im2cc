@@ -1,6 +1,6 @@
 /**
- * @input:    ~/.im2cc/config.json (飞书凭证、白名单、默认参数)
- * @output:   loadConfig(), saveConfig(), getDataDir() — 配置读写和数据目录管理
+ * @input:    ~/.im2cc/config.json (飞书凭证、白名单、默认参数), ~/.im2cc/wechat-account.json
+ * @output:   loadConfig(), saveConfig(), getDataDir(), loadWeChatAccount(), saveWeChatAccount() — 配置读写和数据目录管理
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -82,3 +82,33 @@ export function getInflightDir(): string {
   return INFLIGHT_DIR
 }
 export function getPendingFile(): string { ensureDirs(); return PENDING_FILE }
+
+// --- 微信账号配置 ---
+
+const WECHAT_ACCOUNT_FILE = path.join(CONFIG_DIR, 'wechat-account.json')
+
+export interface WeChatAccount {
+  botToken: string
+  baseUrl: string
+  ilinkBotId: string
+  ilinkUserId: string
+  savedAt: string
+  lastOkAt: string
+  syncBuf: string  // getupdates cursor
+}
+
+export function getWeChatAccountFile(): string { return WECHAT_ACCOUNT_FILE }
+
+export function loadWeChatAccount(): WeChatAccount | null {
+  if (!fs.existsSync(WECHAT_ACCOUNT_FILE)) return null
+  try {
+    return JSON.parse(fs.readFileSync(WECHAT_ACCOUNT_FILE, 'utf-8')) as WeChatAccount
+  } catch { return null }
+}
+
+export function saveWeChatAccount(account: WeChatAccount): void {
+  ensureDirs()
+  const tmp = WECHAT_ACCOUNT_FILE + '.tmp'
+  fs.writeFileSync(tmp, JSON.stringify(account, null, 2), { mode: 0o600 })
+  fs.renameSync(tmp, WECHAT_ACCOUNT_FILE)
+}

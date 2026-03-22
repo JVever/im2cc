@@ -8,10 +8,12 @@ import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { getDataDir } from './config.js'
+import type { TransportType } from './transport.js'
 
 export interface Binding {
   id: string
-  feishuGroupId: string
+  transport: TransportType  // 'feishu' | 'wechat'
+  conversationId: string    // 飞书群 ID / 微信用户标识
   cli: 'claude'
   sessionId: string
   cwd: string
@@ -27,10 +29,22 @@ function bindingsFile(): string {
   return path.join(getDataDir(), 'bindings.json')
 }
 
+/** 读取 bindings，兼容旧格式（自动迁移 feishuGroupId → conversationId） */
 function readBindings(): Binding[] {
   const f = bindingsFile()
   if (!fs.existsSync(f)) return []
-  return JSON.parse(fs.readFileSync(f, 'utf-8')) as Binding[]
+  const raw = JSON.parse(fs.readFileSync(f, 'utf-8')) as Array<Record<string, unknown>>
+  return raw.map(b => {
+    // 兼容旧格式：feishuGroupId → conversationId，补 transport
+    if ('feishuGroupId' in b && !('conversationId' in b)) {
+      b.conversationId = b.feishuGroupId
+      delete b.feishuGroupId
+    }
+    if (!b.transport) {
+      b.transport = 'feishu'
+    }
+    return b as unknown as Binding
+  })
 }
 
 /** 原子写：临时文件 + rename */
@@ -42,24 +56,26 @@ function writeBindings(bindings: Binding[]): void {
 }
 
 export function createBinding(
-  feishuGroupId: string,
+  conversationId: string,
   sessionId: string,
   cwd: string,
   permissionMode: string,
   cliVersion: string,
+  transport: TransportType = 'feishu',
 ): Binding {
   const bindings = readBindings()
 
-  // 如果该群已有活跃 binding，先归档
+  // 如果该会话已有活跃 binding，先归档
   for (const b of bindings) {
-    if (b.feishuGroupId === feishuGroupId && !b.archived) {
+    if (b.conversationId === conversationId && !b.archived) {
       b.archived = true
     }
   }
 
   const binding: Binding = {
     id: crypto.randomUUID(),
-    feishuGroupId,
+    transport,
+    conversationId,
     cli: 'claude',
     sessionId,
     cwd,
@@ -76,25 +92,39 @@ export function createBinding(
   return binding
 }
 
-export function getBinding(feishuGroupId: string): Binding | null {
-  return readBindings().find(b => b.feishuGroupId === feishuGroupId && !b.archived) ?? null
+export function getBinding(conversationId: string): Binding | null {
+  return readBindings().find(b => b.conversationId === conversationId && !b.archived) ?? null
 }
 
-export function updateBinding(feishuGroupId: string, partial: Partial<Binding>): void {
+export function updateBinding(conversationId: string, partial: Partial<Binding>): void {
   const bindings = readBindings()
-  const idx = bindings.findIndex(b => b.feishuGroupId === feishuGroupId && !b.archived)
+  const idx = bindings.findIndex(b => b.conversationId === conversationId && !b.archived)
   if (idx === -1) return
   Object.assign(bindings[idx], partial, { lastActiveAt: new Date().toISOString() })
   writeBindings(bindings)
 }
 
-export function archiveBinding(feishuGroupId: string): Binding | null {
+export function archiveBinding(conversationId: string): Binding | null {
   const bindings = readBindings()
-  const idx = bindings.findIndex(b => b.feishuGroupId === feishuGroupId && !b.archived)
+  const idx = bindings.findIndex(b => b.conversationId === conversationId && !b.archived)
   if (idx === -1) return null
   bindings[idx].archived = true
   writeBindings(bindings)
   return bindings[idx]
+}
+
+/** 归档所有使用指定 sessionId 的活跃绑定（跨 transport 独占） */
+export function archiveBindingsBySession(sessionId: string, excludeConversation?: string): number {
+  const bindings = readBindings()
+  let count = 0
+  for (const b of bindings) {
+    if (b.sessionId === sessionId && !b.archived && b.conversationId !== excludeConversation) {
+      b.archived = true
+      count++
+    }
+  }
+  if (count > 0) writeBindings(bindings)
+  return count
 }
 
 export function listActiveBindings(): Binding[] {
