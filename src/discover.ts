@@ -39,7 +39,7 @@ function slugToPath(slug: string): string | null {
 }
 
 export function pathToSlug(p: string): string {
-  return p.replace(/\//g, '-').replace(/[^\x00-\x7F]/g, '-')
+  return p.replace(/[^a-zA-Z0-9]/g, '-')
 }
 
 function findMatchingPath(basePath: string, targetSlug: string): string | null {

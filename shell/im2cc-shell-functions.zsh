@@ -36,27 +36,38 @@ _im2cc_register() {
   local name="$1" session_id="$2" cwd="$3"
   _im2cc_ensure_registry
   python3 -c "
-import json
+import json, os, sys
 from datetime import datetime
 reg = json.load(open('$_IM2CC_REGISTRY'))
+
+# 唯一性检查：同一 sessionId 不能被多个 name 持有
+for n, data in reg.items():
+    if data.get('sessionId') == '$session_id' and n != '$name':
+        print(f'❌ session 已被 \"{n}\" 注册，不能同时注册为 \"$name\"', file=sys.stderr)
+        sys.exit(1)
+
 reg['$name'] = {
     'sessionId': '$session_id',
     'cwd': '$cwd',
-    'createdAt': datetime.now().isoformat(),
+    'createdAt': reg.get('$name', {}).get('createdAt', datetime.now().isoformat()),
     'lastUsedAt': datetime.now().isoformat()
 }
-json.dump(reg, open('$_IM2CC_REGISTRY', 'w'), indent=2)
-"
+tmp = '$_IM2CC_REGISTRY' + '.tmp'
+json.dump(reg, open(tmp, 'w'), indent=2)
+os.rename(tmp, '$_IM2CC_REGISTRY')
+" || { echo "❌ 注册失败"; return 1; }
 }
 
 _im2cc_remove() {
   local name="$1"
   _im2cc_ensure_registry
   python3 -c "
-import json
+import json, os
 reg = json.load(open('$_IM2CC_REGISTRY'))
 reg.pop('$name', None)
-json.dump(reg, open('$_IM2CC_REGISTRY', 'w'), indent=2)
+tmp = '$_IM2CC_REGISTRY' + '.tmp'
+json.dump(reg, open(tmp, 'w'), indent=2)
+os.rename(tmp, '$_IM2CC_REGISTRY')
 "
 }
 
@@ -67,6 +78,26 @@ _im2cc_connect() {
   else
     tmux attach -dt "$target"
   fi
+}
+
+# session 文件位置检查: exit 0=here(正确位置), 1=elsewhere(错误位置), 2=missing(不存在)
+_im2cc_check_session_file() {
+  local sid="$1" cwd="$2"
+  python3 -c "
+import os, re, sys
+sid = '$sid'
+cwd = '$cwd'
+projects = os.path.expanduser('~/.claude/projects')
+slug = re.sub(r'[^a-zA-Z0-9]', '-', cwd)
+expected = os.path.join(projects, slug, sid + '.jsonl')
+if os.path.exists(expected):
+    sys.exit(0)  # here
+for s in os.listdir(projects):
+    if s == slug: continue
+    if os.path.exists(os.path.join(projects, s, sid + '.jsonl')):
+        sys.exit(1)  # elsewhere
+sys.exit(2)  # missing
+" 2>/dev/null
 }
 
 # 解绑飞书端：归档绑定 + 通知飞书群
@@ -266,15 +297,29 @@ else:
       return 1
     fi
 
+    # 验证 session 文件位置
+    _im2cc_check_session_file "$session_id" "$cwd"
+    local check_result=$?
+
+    if [[ $check_result -eq 1 ]]; then
+      echo "❌ session ${session_id:0:8} 存在于错误的项目目录"
+      return 1
+    fi
+
+    local session_flag="--resume"
+    if [[ $check_result -eq 2 ]]; then
+      session_flag="--session-id"
+    fi
+
     # 注册并打开
-    _im2cc_register "$new_name" "$session_id" "$cwd"
+    _im2cc_register "$new_name" "$session_id" "$cwd" || return 1
     echo "✅ 已注册 \"$new_name\" → $(basename "$cwd") [$session_id]"
 
     local tmux_name="${_IM2CC_TMUX_PREFIX}${new_name}"
     _im2cc_release_feishu "$session_id" "$new_name"
 
     tmux new-session -d -s "$tmux_name" -c "$cwd" \
-      "claude --resume $session_id --dangerously-skip-permissions --name 'im2cc:${new_name}'"
+      "claude $session_flag $session_id --dangerously-skip-permissions --name 'im2cc:${new_name}'"
 
     _im2cc_connect "$tmux_name"
     return
@@ -299,10 +344,25 @@ else:
     return
   fi
 
-  # tmux session 不存在，用 --resume 重新打开
+  # tmux session 不存在，重新打开 — 先验证 session 文件位置
+  _im2cc_check_session_file "$session_id" "$cwd"
+  local check_result=$?
+
+  if [[ $check_result -eq 1 ]]; then
+    echo "❌ session ${session_id:0:8} 存在于错误的项目目录"
+    echo "   registry 中 cwd=$cwd 与 session 文件位置不匹配"
+    echo "   请 fk $name 后重新 fn"
+    return 1
+  fi
+
+  local session_flag="--resume"
+  if [[ $check_result -eq 2 ]]; then
+    session_flag="--session-id"
+  fi
+
   echo "恢复 \"$name\" → $(basename "$cwd")"
   tmux new-session -d -s "$tmux_name" -c "$cwd" \
-    "claude --resume $session_id --dangerously-skip-permissions --name 'im2cc:${name}'"
+    "claude $session_flag $session_id --dangerously-skip-permissions --name 'im2cc:${name}'"
 
   _im2cc_connect "$tmux_name"
 }

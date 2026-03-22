@@ -1,12 +1,16 @@
 /**
  * @input:    Claude Code CLI (`claude` 命令), session ID, 用户消息
- * @output:   createSession(), sendMessage(), interrupt() — Claude Code 生命周期管理
+ * @output:   createSession(), sendMessage(), interrupt(), checkSessionFile() — Claude Code 生命周期管理
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
 import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { spawn, execSync, type ChildProcess } from 'node:child_process'
 import crypto from 'node:crypto'
+import { log } from './logger.js'
+import { pathToSlug } from './discover.js'
 
 export interface CLIEvent {
   type: 'init' | 'assistant' | 'result' | 'error' | 'unknown'
@@ -62,9 +66,23 @@ export function sendMessage(
   permissionMode: string,
   opts?: SendMessageOptions,
 ): Promise<string> {
+  const status = checkSessionFile(sessionId, cwd)
+
+  if (status === 'elsewhere') {
+    const slug = pathToSlug(cwd)
+    return Promise.reject(new Error(
+      `session ${sessionId.slice(0, 8)} 存在于错误的项目目录下（期望 slug: ${slug}）。` +
+      `registry 中的 cwd 与 session 文件位置不匹配，请用 fk 清除后重新 fn。`
+    ))
+  }
+
+  if (status === 'missing') {
+    log(`[claude-driver] session ${sessionId} 文件不存在，使用 --session-id 创建`)
+  }
+
   return runClaude({
     message,
-    sessionFlag: ['--resume', sessionId],
+    sessionFlag: status === 'here' ? ['--resume', sessionId] : ['--session-id', sessionId],
     cwd,
     permissionMode,
     onSpawn: opts?.onSpawn,
@@ -121,6 +139,27 @@ export async function interrupt(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null) return
 
   killGroup('SIGKILL')
+}
+
+/** session 文件位置状态 */
+export type SessionFileStatus = 'here' | 'elsewhere' | 'missing'
+
+/** 检查 session 文件位置：here=正确 slug 下, elsewhere=其他 slug 下, missing=不存在 */
+export function checkSessionFile(sessionId: string, cwd: string): SessionFileStatus {
+  const projectsDir = path.join(os.homedir(), '.claude', 'projects')
+  const expectedSlug = pathToSlug(cwd)
+  const expectedPath = path.join(projectsDir, expectedSlug, `${sessionId}.jsonl`)
+
+  if (fs.existsSync(expectedPath)) return 'here'
+
+  try {
+    for (const slug of fs.readdirSync(projectsDir)) {
+      if (slug === expectedSlug) continue
+      if (fs.existsSync(path.join(projectsDir, slug, `${sessionId}.jsonl`))) return 'elsewhere'
+    }
+  } catch { /* projects 目录不存在 */ }
+
+  return 'missing'
 }
 
 // --- 内部实现 ---

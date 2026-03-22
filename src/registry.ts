@@ -36,9 +36,26 @@ function writeRegistry(reg: Registry): void {
   fs.renameSync(tmp, f)
 }
 
-/** 注册一个命名 session */
+/** 查找哪个 name 持有指定 sessionId，不存在则返回 null */
+function findBySessionId(reg: Registry, sessionId: string): string | null {
+  for (const [name, data] of Object.entries(reg)) {
+    if (data.sessionId === sessionId) return name
+  }
+  return null
+}
+
+/** 注册一个命名 session（唯一性约束：同一 sessionId 不能被多个 name 持有） */
 export function register(name: string, sessionId: string, cwd: string): RegisteredSession {
   const reg = readRegistry()
+
+  const existingOwner = findBySessionId(reg, sessionId)
+  if (existingOwner && existingOwner !== name) {
+    throw new Error(
+      `session ${sessionId.slice(0, 8)} 已被 "${existingOwner}" 注册，不能同时注册为 "${name}"。` +
+      `如果要改名，请先 fk ${existingOwner}。`
+    )
+  }
+
   const now = new Date().toISOString()
   reg[name] = { sessionId, cwd, createdAt: reg[name]?.createdAt ?? now, lastUsedAt: now }
   writeRegistry(reg)

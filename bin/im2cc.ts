@@ -11,7 +11,7 @@ import os from 'node:os'
 import { execSync, fork } from 'node:child_process'
 import { loadConfig, saveConfig, configExists, getPidFile, getLogDir, getConfigDir, type Im2ccConfig } from '../src/config.js'
 import { listActiveBindings } from '../src/session.js'
-import { getClaudeVersion, createSession } from '../src/claude-driver.js'
+import { getClaudeVersion, createSession, checkSessionFile } from '../src/claude-driver.js'
 import { register, lookup, listRegistered } from '../src/registry.js'
 import { expandPath, validatePath } from '../src/security.js'
 import readline from 'node:readline'
@@ -270,13 +270,22 @@ async function cmdOpen(): Promise<void> {
     // 存在，直接 attach
     execSync(`tmux attach -t "${tmuxSession}"`, { stdio: 'inherit' })
   } catch {
-    // 不存在，创建新的 tmux session
+    // 不存在，创建新的 tmux session — 先验证 session 文件位置
+    const status = checkSessionFile(session.sessionId, session.cwd)
+    if (status === 'elsewhere') {
+      console.log(`❌ session ${session.sessionId.slice(0, 8)} 存在于错误的项目目录`)
+      console.log(`   registry 中 cwd=${session.cwd} 与 session 文件位置不匹配`)
+      console.log(`   请 fk ${session.name} 后重新 fn`)
+      return
+    }
+    const sessionFlag = status === 'here' ? '--resume' : '--session-id'
+
     try {
-      execSync(`tmux new-session -d -s "${tmuxSession}" -c "${session.cwd}" "claude --resume ${session.sessionId} --name 'im2cc:${session.name}'"`)
+      execSync(`tmux new-session -d -s "${tmuxSession}" -c "${session.cwd}" "claude ${sessionFlag} ${session.sessionId} --name 'im2cc:${session.name}'"`)
       execSync(`tmux attach -t "${tmuxSession}"`, { stdio: 'inherit' })
     } catch {
       // tmux 不可用，直接启动
-      execSync(`claude --resume ${session.sessionId} --name "im2cc:${session.name}"`, { stdio: 'inherit', cwd: session.cwd })
+      execSync(`claude ${sessionFlag} ${session.sessionId} --name "im2cc:${session.name}"`, { stdio: 'inherit', cwd: session.cwd })
     }
   }
 }
