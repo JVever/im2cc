@@ -8,3 +8,11 @@ dist/
 *.pid
 
 .DS_Store
+
+# 开发过程中的 AI 协作记录（含个人路径）
+cross-review-records/
+
+# 项目内部文档（不随代码分发）
+PROJECT.md
+DEVLOG.md
+TASKS.md

@@ -65,6 +65,7 @@ export class FeishuAdapter implements TransportAdapter {
             }
 
             if (maxCreateTime > 0) {
+              // 不做 +1，避免跳过同一秒内的后续消息。isDuplicate 负责去重。
               setCursor(chat.chatId, Math.floor(maxCreateTime / 1000).toString())
             }
           } catch (err) {

@@ -14,6 +14,13 @@ export function isUserAllowed(userId: string, config: Im2ccConfig): boolean {
   return config.allowedUserIds.includes(userId)
 }
 
+/** session 名称合法性校验（防注入：只允许字母、数字、连字符、下划线） */
+const SAFE_SESSION_NAME = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/
+
+export function isValidSessionName(name: string): boolean {
+  return SAFE_SESSION_NAME.test(name)
+}
+
 /** 展开 ~ 并解析为绝对路径 */
 export function expandPath(p: string): string {
   if (p.startsWith('~/') || p === '~') {

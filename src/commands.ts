@@ -7,7 +7,7 @@
 import path from 'node:path'
 import type { Im2ccConfig } from './config.js'
 import type { TransportType } from './transport.js'
-import { validatePath, resolvePath, listProjects } from './security.js'
+import { validatePath, resolvePath, listProjects, isValidSessionName } from './security.js'
 import { createBinding, getBinding, archiveBinding, archiveBindingsBySession, updateBinding } from './session.js'
 import { createSession, getClaudeVersion, killLocalSession } from './claude-driver.js'
 import { handleStop, getQueueStatus } from './queue.js'
@@ -69,6 +69,9 @@ async function handleFn(args: string, conversationId: string, config: Im2ccConfi
 
   const parts = args.split(/\s+/)
   const sessionName = parts[0]
+  if (!isValidSessionName(sessionName)) {
+    return `❌ 名称 "${sessionName}" 不合法\n只允许字母、数字、连字符和下划线`
+  }
   const projectHint = parts[1] || sessionName // 默认用对话名称作为项目名
 
   // 解析项目路径
@@ -251,6 +254,10 @@ async function handleFcRegisterAndConnect(
   config: Im2ccConfig,
   transport: TransportType = 'feishu',
 ): Promise<string> {
+  if (!isValidSessionName(name)) {
+    return `❌ 名称 "${name}" 不合法\n只允许字母、数字、连字符和下划线`
+  }
+
   // 检查名称是否已被占用
   const existingReg = lookup(name)
   if (existingReg) {
@@ -362,40 +369,6 @@ function handleFk(args: string, conversationId: string): string {
   ].join('\n')
 }
 
-async function handleFnNew(args: string, conversationId: string, config: Im2ccConfig, transport: TransportType = 'feishu'): Promise<string> {
-  // /new <名称> [项目]
-  if (!args) return '用法: /new <对话名称> [项目名]'
-
-  const old = archiveBinding(conversationId)
-  const parts = args.split(/\s+/)
-  const sessionName = parts[0]
-  const projectHint = parts[1] || (old ? path.basename(old.cwd) : sessionName)
-
-  const resolved = resolvePath(projectHint, config)
-  const validation = validatePath(resolved, config)
-  if (!validation.valid) return `❌ ${validation.error}`
-
-  try {
-    const cliVersion = getClaudeVersion()
-    const { sessionId } = await createSession(validation.resolvedPath, config.defaultPermissionMode, sessionName)
-
-    register(sessionName, sessionId, validation.resolvedPath)
-    const binding = createBinding(conversationId, sessionId, validation.resolvedPath, config.defaultPermissionMode, cliVersion, transport)
-
-    const lines = ['✅ 新对话已创建']
-    if (old) lines.push(`旧对话仍可通过 /fc 恢复`)
-    lines.push(
-      `📛 ${sessionName}`,
-      `📁 ${path.basename(validation.resolvedPath)}`,
-      `⚙️ 模式: ${binding.permissionMode}`,
-      '',
-      `回到电脑: im2cc open ${sessionName}`,
-    )
-    return lines.join('\n')
-  } catch (err) {
-    return `❌ 创建失败: ${err instanceof Error ? err.message : String(err)}`
-  }
-}
 
 function handleFs(conversationId: string): string {
   const binding = getBinding(conversationId)
