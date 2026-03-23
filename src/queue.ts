@@ -233,7 +233,9 @@ export async function handleStop(conversationId: string): Promise<string> {
     return '当前没有执行中的任务'
   }
   group.state = 'cancelling'
-  await getDefaultDriver().interrupt(group.currentChild)
+  const binding = getBinding(conversationId)
+  const driver = binding ? getDriver(binding.tool ?? 'claude') : getDefaultDriver()
+  await driver.interrupt(group.currentChild)
   // 不在此处设置 idle — processNext 的 finally 块会负责状态转换
   return '✅ 已中断当前任务'
 }

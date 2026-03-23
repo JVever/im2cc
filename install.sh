@@ -122,8 +122,8 @@ if [ -n "$SHELL_RC" ]; then
     warn "请重新打开终端或运行: source $SHELL_RC"
   fi
 else
-  warn "未检测到 .zshrc 或 .bashrc，请手动添加:"
-  echo "   source \"$SHELL_SCRIPT\""
+  warn "未检测到 .zshrc 或 .bashrc，请手动添加以下内容到你的 shell 配置文件:"
+  echo "$SHELL_FUNCS"
 fi
 
 # --- 4. 安装 Session 漂移同步 hook ---

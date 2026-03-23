@@ -656,10 +656,9 @@ async function cmdSetup(): Promise<void> {
   console.log(`\n✅ 配置已保存到 ${getConfigDir()}/config.json`)
   console.log('\n下一步:')
   console.log('  1. 在飞书开放平台为应用添加 "机器人" 能力')
-  console.log('  2. 添加权限: im:message:send_as_bot, im:message, im:message.group_at_msg:readonly')
-  console.log('  3. 启用 WebSocket 模式 (事件与回调 → 长连接)')
-  console.log('  4. 发布应用')
-  console.log('  5. 运行 im2cc start')
+  console.log('  2. 添加权限: im:message, im:message:send_as_bot, im:message.group_msg:readonly, im:message.group_at_msg:readonly, im:chat:readonly, im:resource')
+  console.log('  3. 发布应用')
+  console.log('  4. 运行 im2cc start')
 }
 
 function cmdInstallService(): void {
