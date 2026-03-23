@@ -84,7 +84,8 @@ else
 fi
 
 # --- 3. 配置 shell 命令 ---
-SHELL_SCRIPT="$(cd "$(dirname "$0")" && pwd)/shell/im2cc-shell-functions.zsh"
+# shell 函数是薄包装（<20 行），所有逻辑在 im2cc CLI 中。
+# 直接写入 .zshrc/.bashrc，不依赖 source 外部文件，避免版本不同步。
 SHELL_RC=""
 
 if [ -n "$ZSH_VERSION" ] || [ "$SHELL" = "$(which zsh)" ] || [ -f "$HOME/.zshrc" ]; then
@@ -93,26 +94,31 @@ elif [ -f "$HOME/.bashrc" ]; then
   SHELL_RC="$HOME/.bashrc"
 fi
 
+SHELL_FUNCS='fn()       { im2cc new "$@"; }
+fc()       { im2cc connect "$@"; }
+fl()       { im2cc list; }
+fk()       { im2cc delete "$@"; }
+fd()       { im2cc detach; }
+fs()       { im2cc show "$@"; }
+fn-codex() { im2cc new --tool codex "$@"; }
+fn-kimi()  { im2cc new --tool kimi "$@"; }
+fn-gemini(){ im2cc new --tool gemini "$@"; }
+fn-cline() { im2cc new --tool cline "$@"; }'
+
 if [ -n "$SHELL_RC" ]; then
-  if grep -q "source.*$SHELL_SCRIPT" "$SHELL_RC" 2>/dev/null; then
-    # 已指向当前项目的正确路径
+  if grep -q "im2cc new" "$SHELL_RC" 2>/dev/null; then
+    # 新格式已存在（薄包装）
     ok "终端命令已配置 (fn/fc/fl/fk/fd/fs)"
-  elif grep -q "im2cc-shell-functions" "$SHELL_RC" 2>/dev/null; then
-    # 有旧路径，替换为当前项目路径
-    # 先移除旧的 source 行和注释行
-    sed -i.bak '/im2cc.*shell-functions/d' "$SHELL_RC"
-    sed -i.bak '/# im2cc —/d' "$SHELL_RC"
-    rm -f "$SHELL_RC.bak"
-    echo "" >> "$SHELL_RC"
-    echo "# im2cc — 终端命令 (fn/fc/fl/fk/fd/fs)" >> "$SHELL_RC"
-    echo "source \"$SHELL_SCRIPT\"" >> "$SHELL_RC"
-    ok "终端命令已更新为当前项目路径"
-    warn "请重新打开终端或运行: source $SHELL_RC"
   else
+    # 清理旧格式（source 外部文件的方式）
+    if grep -q "im2cc" "$SHELL_RC" 2>/dev/null; then
+      sed -i.bak '/im2cc.*shell-functions/d; /# im2cc/d; /im2cc new/d; /im2cc connect/d; /im2cc list/d; /im2cc delete/d; /im2cc detach/d; /im2cc show/d; /fn-codex/d; /fn-kimi/d; /fn-gemini/d; /fn-cline/d' "$SHELL_RC"
+      rm -f "$SHELL_RC.bak"
+    fi
     echo "" >> "$SHELL_RC"
-    echo "# im2cc — 终端命令 (fn/fc/fl/fk/fd/fs)" >> "$SHELL_RC"
-    echo "source \"$SHELL_SCRIPT\"" >> "$SHELL_RC"
-    ok "终端命令已添加到 $SHELL_RC"
+    echo "# im2cc — 终端命令（薄包装，逻辑在 im2cc CLI 中）" >> "$SHELL_RC"
+    echo "$SHELL_FUNCS" >> "$SHELL_RC"
+    ok "终端命令已写入 $SHELL_RC"
     warn "请重新打开终端或运行: source $SHELL_RC"
   fi
 else

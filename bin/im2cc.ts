@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * @input:    CLI 参数 (start/stop/status/logs/sessions/setup/install-service/doctor)
- * @output:   守护进程管理和运维命令
+ * @input:    CLI 参数 (start/stop/status/logs/sessions/new/connect/list/delete/detach/show/setup/install-service/doctor/wechat)
+ * @output:   守护进程管理 + 完整 session 管理命令（new/connect/list/delete/detach/show）
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -10,11 +10,20 @@ import path from 'node:path'
 import os from 'node:os'
 import { execSync, execFileSync, fork } from 'node:child_process'
 import { loadConfig, saveConfig, configExists, getPidFile, getLogDir, getConfigDir, loadWeChatAccount, saveWeChatAccount, getWeChatAccountFile, type Im2ccConfig } from '../src/config.js'
-import { listActiveBindings } from '../src/session.js'
-import { getClaudeVersion, createSession, checkSessionFile } from '../src/claude-driver.js'
-import { register, lookup, listRegistered } from '../src/registry.js'
-import { expandPath, validatePath } from '../src/security.js'
+import { listActiveBindings, archiveBinding } from '../src/session.js'
+import { getClaudeVersion } from '../src/claude-driver.js'
+import { register, lookup, listRegistered, remove } from '../src/registry.js'
+import { expandPath, validatePath, isValidSessionName } from '../src/security.js'
+import { getDriver, hasDriver, type ToolId } from '../src/tool-driver.js'
+import { findSession } from '../src/discover.js'
 import readline from 'node:readline'
+
+// 触发各 driver 自注册（模块级副作用）
+import '../src/claude-driver.js'
+import '../src/codex-driver.js'
+import '../src/kimi-driver.js'
+import '../src/gemini-driver.js'
+import '../src/cline-driver.js'
 
 const command = process.argv[2]
 
@@ -25,8 +34,12 @@ switch (command) {
   case 'logs': cmdLogs(); break
   case 'sessions': cmdSessions(); break
   case 'new': await cmdNew(); break
-  case 'open': await cmdOpen(); break
+  case 'connect': await cmdConnect(); break
+  case 'open': await cmdConnect(); break  // backward compat
   case 'list': cmdList(); break
+  case 'delete': cmdDelete(); break
+  case 'detach': cmdDetach(); break
+  case 'show': cmdShow(); break
   case 'setup': await cmdSetup(); break
   case 'install-service': cmdInstallService(); break
   case 'doctor': cmdDoctor(); break
@@ -37,9 +50,12 @@ switch (command) {
 用法: im2cc <command>
 
 对话管理:
-  new <名称> [路径]  创建新对话（类似 tnh）
-  open <名称>        打开已有对话（类似 tc）
-  list               列出所有已注册对话
+  new [--tool <工具>] <名称> [路径]  创建新对话
+  connect [名称] [ID前缀]           接入已有对话（别名: open）
+  list                              列出所有已注册对话
+  show [名称]                       查看对话详情
+  delete <名称>                     终止并删除对话
+  detach                            从当前 tmux 会话断开
 
 守护进程:
   setup              配置飞书 App 凭证
@@ -59,6 +75,96 @@ switch (command) {
   doctor             检查环境
 `)
 }
+
+// ─── tmux 辅助 ───────────────────────────────────────
+
+/** 检查 tmux session 是否存在 */
+function tmuxSessionExists(name: string): boolean {
+  try {
+    execFileSync('tmux', ['has-session', '-t', name], { stdio: 'ignore' })
+    return true
+  } catch { return false }
+}
+
+/** 连接到 tmux session（在 tmux 内用 switch-client，否则用 attach） */
+function tmuxConnect(tmuxSession: string): void {
+  try {
+    if (process.env.TMUX) {
+      execFileSync('tmux', ['switch-client', '-t', tmuxSession], { stdio: 'inherit' })
+    } else {
+      execFileSync('tmux', ['attach', '-dt', tmuxSession], { stdio: 'inherit' })
+    }
+  } catch {
+    console.log(`tmux 操作失败。手动运行: tmux attach -t ${tmuxSession}`)
+  }
+}
+
+/** 查找 tmux session（兼容新旧命名格式） */
+function findTmuxSession(name: string, tool: string = 'claude'): string | null {
+  const newName = `im2cc-${tool}-${name}`
+  if (tmuxSessionExists(newName)) return newName
+  const oldName = `im2cc-${name}`
+  if (tmuxSessionExists(oldName)) return oldName
+  return null
+}
+
+// ─── 工具 → tmux 交互式命令映射 ─────────────────────
+
+/** 生成创建 session 的 tmux 命令参数（交互模式） */
+function toolCreateArgs(tool: ToolId, sessionId: string, name: string): string[] {
+  switch (tool) {
+    case 'claude': return ['claude', '--session-id', sessionId, '--dangerously-skip-permissions', '--name', `im2cc:${name}`]
+    case 'codex':  return ['codex', 'exec', '--json', '--full-auto', '会话已建立。请回复就绪。']
+    case 'kimi':   return ['kimi', '--print', '-p', '会话已建立。请回复就绪。', '--output-format=stream-json']
+    case 'gemini': return ['gemini', '-p', '会话已建立。请回复就绪。', '--output-format', 'json', '-y']
+    case 'cline':  return ['cline', '-y', '--json', '会话已建立。请回复就绪。']
+    default:       return [tool, '--session-id', sessionId]
+  }
+}
+
+/** 生成恢复 session 的 tmux 命令参数（交互模式） */
+function toolResumeArgs(tool: ToolId, sessionId: string, name: string): string[] {
+  switch (tool) {
+    case 'claude': return ['claude', '--resume', sessionId, '--dangerously-skip-permissions', '--name', `im2cc:${name}`]
+    case 'codex':  return ['codex', 'exec', 'resume', sessionId, '--json', '--full-auto']
+    case 'kimi':   return ['kimi', '--session', sessionId, '--print', '--output-format=stream-json']
+    case 'gemini': return ['gemini', '--resume', sessionId, '-y', '--output-format', 'json']
+    case 'cline':  return ['cline', '-y', '--resume', sessionId, '--json']
+    default:       return [tool, '--resume', sessionId]
+  }
+}
+
+// ─── 远程绑定解除 ───────────────────────────────────
+
+/** 解除远程端绑定并通知 IM */
+async function releaseRemoteBinding(sessionId: string, sessionName: string): Promise<void> {
+  const bindings = listActiveBindings()
+  const remoteBinding = bindings.find(b => b.sessionId === sessionId)
+  if (!remoteBinding) return
+
+  archiveBinding(remoteBinding.conversationId)
+
+  // 飞书端尝试通知
+  if (remoteBinding.transport === 'feishu' || !remoteBinding.transport) {
+    try {
+      const config = loadConfig()
+      const lark = await import('@larksuiteoapi/node-sdk')
+      const client = new lark.Client({ appId: config.feishu.appId, appSecret: config.feishu.appSecret })
+      await client.im.message.create({
+        params: { receive_id_type: 'chat_id' },
+        data: {
+          receive_id: remoteBinding.conversationId,
+          msg_type: 'text',
+          content: JSON.stringify({ text: `🔄 "${sessionName}" 已转到电脑端` }),
+        },
+      })
+    } catch { /* 通知失败不影响主流程 */ }
+  }
+
+  console.log(`🔄 已从${remoteBinding.transport ?? '远程'}端断开`)
+}
+
+// ─── 守护进程命令 ────────────────────────────────────
 
 async function cmdStart(): Promise<void> {
   if (!configExists()) {
@@ -156,25 +262,46 @@ function cmdSessions(): void {
   }
 }
 
-/** tmux session 名称前缀，避免和用户其他 tmux session 冲突 */
-const TMUX_PREFIX = 'im2cc-'
+// ─── 对话管理命令 ────────────────────────────────────
 
-/** im2cc new <名称> [路径] — 在 tmux 中创建新对话并注册（类似 tnh） */
+/** im2cc new [--tool <工具>] <名称> [路径] — 创建新对话并在 tmux 中打开 */
 async function cmdNew(): Promise<void> {
-  const name = process.argv[3]
-  const pathArg = process.argv[4]
+  // 解析 --tool 参数
+  let tool: ToolId = 'claude'
+  const args = process.argv.slice(3)
+  const toolIdx = args.indexOf('--tool')
+  if (toolIdx !== -1 && args[toolIdx + 1]) {
+    tool = args[toolIdx + 1] as ToolId
+    args.splice(toolIdx, 2)
+  }
+
+  const name = args[0]
+  const pathArg = args[1]
 
   if (!name) {
-    console.log('用法: im2cc new <对话名称> [项目路径]')
+    console.log('用法: im2cc new [--tool <工具>] <对话名称> [项目路径]')
     console.log('例如: im2cc new auth-refactor ~/Code/im2cc')
+    console.log('      im2cc new --tool codex myproject')
     console.log('      im2cc new bugfix       (使用当前目录)')
+    return
+  }
+
+  // 名称安全校验
+  if (!isValidSessionName(name)) {
+    console.log('❌ 名称不合法，只允许字母、数字、连字符和下划线（1-64 字符）')
+    return
+  }
+
+  // 检查工具是否已注册
+  if (!hasDriver(tool)) {
+    console.log(`❌ 工具 "${tool}" 未注册。可用工具: claude, codex, kimi, gemini, cline`)
     return
   }
 
   // 检查名称是否已存在
   const existing = lookup(name)
   if (existing) {
-    console.log(`"${name}" 已存在。用 im2cc open ${name} 打开，或换个名称。`)
+    console.log(`"${name}" 已存在。用 im2cc connect ${name} 打开，或换个名称。`)
     return
   }
 
@@ -187,25 +314,42 @@ async function cmdNew(): Promise<void> {
     return
   }
 
-  console.log(`创建新对话 "${name}" → ${validation.resolvedPath}...`)
+  const toolLabel = tool !== 'claude' ? ` [${tool}]` : ''
+  console.log(`创建新对话 "${name}"${toolLabel} → ${validation.resolvedPath}...`)
 
   try {
-    const { sessionId } = await createSession(validation.resolvedPath, config.defaultPermissionMode, name)
-    register(name, sessionId, validation.resolvedPath)
+    const driver = getDriver(tool)
+    const { sessionId } = await driver.createSession(validation.resolvedPath, config.defaultPermissionMode ?? 'default', name)
+    register(name, sessionId, validation.resolvedPath, tool)
 
-    // 在 tmux 中启动交互式 Claude Code
-    const tmuxSession = TMUX_PREFIX + name
+    // 在 tmux 中启动交互式工具
+    const tmuxSession = `im2cc-${tool}-${name}`
+    // 清理可能残留的同名 tmux session
+    if (tmuxSessionExists(tmuxSession)) {
+      execFileSync('tmux', ['kill-session', '-t', tmuxSession], { stdio: 'ignore' })
+    }
+    const oldTmux = `im2cc-${name}`
+    if (tmuxSessionExists(oldTmux)) {
+      execFileSync('tmux', ['kill-session', '-t', oldTmux], { stdio: 'ignore' })
+    }
+
     try {
+      const resumeArgs = toolResumeArgs(tool, sessionId, name)
       execFileSync('tmux', [
         'new-session', '-d', '-s', tmuxSession, '-c', validation.resolvedPath,
-        'claude', '--resume', sessionId, '--name', `im2cc:${name}`,
+        ...resumeArgs,
       ])
-      execFileSync('tmux', ['attach', '-t', tmuxSession], { stdio: 'inherit' })
+
+      console.log(`✅ 创建对话 "${name}"${toolLabel} → ${path.basename(validation.resolvedPath)}`)
+      console.log(`   飞书/微信: /fc ${name}`)
+
+      tmuxConnect(tmuxSession)
     } catch {
       // tmux 不可用，直接启动
       console.log(`✅ 已创建 "${name}"`)
-      console.log(`   打开: im2cc open ${name}`)
-      execFileSync('claude', ['--resume', sessionId, '--name', `im2cc:${name}`], { stdio: 'inherit', cwd: validation.resolvedPath })
+      console.log(`   打开: im2cc connect ${name}`)
+      const resumeArgs = toolResumeArgs(tool, sessionId, name)
+      execFileSync(resumeArgs[0], resumeArgs.slice(1), { stdio: 'inherit', cwd: validation.resolvedPath })
     }
   } catch (err) {
     console.error(`❌ 创建失败: ${err instanceof Error ? err.message : String(err)}`)
@@ -213,25 +357,45 @@ async function cmdNew(): Promise<void> {
   }
 }
 
-/** im2cc open <名称> — 打开已有对话（类似 tc） */
-async function cmdOpen(): Promise<void> {
+/** im2cc connect [名称] [ID前缀] — 接入已有对话 */
+async function cmdConnect(): Promise<void> {
   const target = process.argv[3]
+  const idPrefix = process.argv[4]
 
+  // 无参数：列出所有对话，唯一时自动接入
   if (!target) {
-    // 列出所有对话供选择
     const all = listRegistered()
     if (all.length === 0) {
       console.log('没有已注册的对话。用 im2cc new <名称> 创建。')
       return
     }
-    console.log('已注册的对话:')
-    for (const s of all) {
-      console.log(`  ${s.name} (${path.basename(s.cwd)})`)
+    if (all.length === 1) {
+      console.log(`接入: ${all[0].name}`)
+      // 递归调用：注入参数
+      process.argv[3] = all[0].name
+      await cmdConnect()
+      return
     }
-    console.log(`\nim2cc open <名称> 打开`)
+    console.log('已注册的对话:')
+    console.log('─'.repeat(50))
+    for (const s of all) {
+      const tmux = findTmuxSession(s.name, s.tool)
+      const status = tmux ? '🟢 活跃' : '⬤ 休眠'
+      const toolTag = s.tool && s.tool !== 'claude' ? ` [${s.tool}]` : ''
+      console.log(`  ${status}  ${s.name}  (${path.basename(s.cwd)})${toolTag}  [${s.sessionId.slice(0, 8)}]`)
+    }
+    console.log('─'.repeat(50))
+    console.log('\nim2cc connect <名称> 接入')
     return
   }
 
+  // 双参数模式: connect <新名称> <ID前缀>
+  if (idPrefix) {
+    await cmdConnectDoubleArg(target, idPrefix)
+    return
+  }
+
+  // 单参数模式: connect <名称>
   const session = lookup(target)
   if (!session) {
     console.log(`未找到 "${target}"`)
@@ -243,67 +407,123 @@ async function cmdOpen(): Promise<void> {
     return
   }
 
+  const tool = session.tool ?? 'claude'
+
   // 独占：解绑远程端
-  const bindings = listActiveBindings()
-  const remoteBinding = bindings.find(b => b.sessionId === session.sessionId)
-  if (remoteBinding) {
-    const { archiveBinding } = await import('../src/session.js')
-    archiveBinding(remoteBinding.conversationId)
+  await releaseRemoteBinding(session.sessionId, session.name)
 
-    // 飞书端尝试通知
-    if (remoteBinding.transport === 'feishu' || !remoteBinding.transport) {
-      try {
-        const config = loadConfig()
-        const lark = await import('@larksuiteoapi/node-sdk')
-        const client = new lark.Client({ appId: config.feishu.appId, appSecret: config.feishu.appSecret })
-        await client.im.message.create({
-          params: { receive_id_type: 'chat_id' },
-          data: {
-            receive_id: remoteBinding.conversationId,
-            msg_type: 'text',
-            content: JSON.stringify({ text: `🔄 对话 "${session.name}" 已转移到电脑端` }),
-          },
-        })
-      } catch { /* 通知失败不影响主流程 */ }
-    }
-
-    console.log(`🔄 已从${remoteBinding.transport ?? 'feishu'}端断开 "${session.name}"`)
+  // 查找已有 tmux session
+  const tmux = findTmuxSession(session.name, tool)
+  if (tmux) {
+    console.log(`接入 "${session.name}" (活跃)`)
+    tmuxConnect(tmux)
+    return
   }
 
-  // 在 tmux 中打开
-  const tmuxSession = TMUX_PREFIX + session.name
-  console.log(`打开 "${session.name}" (${path.basename(session.cwd)})...`)
+  // tmux session 不存在，重新创建
+  const driver = getDriver(tool as ToolId)
+  const status = driver.checkSessionFile(session.sessionId, session.cwd)
+  if (status === 'elsewhere') {
+    console.log(`❌ session ${session.sessionId.slice(0, 8)} 存在于错误的项目目录`)
+    console.log(`   registry 中 cwd=${session.cwd} 与 session 文件位置不匹配`)
+    console.log(`   请 im2cc delete ${session.name} 后重新 im2cc new`)
+    return
+  }
+
+  const tmuxSession = `im2cc-${tool}-${session.name}`
+  const cmdArgs = status === 'here'
+    ? toolResumeArgs(tool as ToolId, session.sessionId, session.name)
+    : toolCreateArgs(tool as ToolId, session.sessionId, session.name)
+
+  console.log(`恢复 "${session.name}" → ${path.basename(session.cwd)}`)
 
   try {
-    // 检查 tmux session 是否存在
-    execFileSync('tmux', ['has-session', '-t', tmuxSession], { stdio: 'ignore' })
-    // 存在，直接 attach
-    execFileSync('tmux', ['attach', '-t', tmuxSession], { stdio: 'inherit' })
+    execFileSync('tmux', [
+      'new-session', '-d', '-s', tmuxSession, '-c', session.cwd,
+      ...cmdArgs,
+    ])
+    tmuxConnect(tmuxSession)
   } catch {
-    // 不存在，创建新的 tmux session — 先验证 session 文件位置
-    const status = checkSessionFile(session.sessionId, session.cwd)
-    if (status === 'elsewhere') {
-      console.log(`❌ session ${session.sessionId.slice(0, 8)} 存在于错误的项目目录`)
-      console.log(`   registry 中 cwd=${session.cwd} 与 session 文件位置不匹配`)
-      console.log(`   请 fk ${session.name} 后重新 fn`)
-      return
-    }
-    const sessionFlag = status === 'here' ? '--resume' : '--session-id'
-
-    try {
-      execFileSync('tmux', [
-        'new-session', '-d', '-s', tmuxSession, '-c', session.cwd,
-        'claude', sessionFlag, session.sessionId, '--name', `im2cc:${session.name}`,
-      ])
-      execFileSync('tmux', ['attach', '-t', tmuxSession], { stdio: 'inherit' })
-    } catch {
-      // tmux 不可用，直接启动
-      execFileSync('claude', [sessionFlag, session.sessionId, '--name', `im2cc:${session.name}`], { stdio: 'inherit', cwd: session.cwd })
-    }
+    // tmux 不可用，直接启动
+    execFileSync(cmdArgs[0], cmdArgs.slice(1), { stdio: 'inherit', cwd: session.cwd })
   }
 }
 
-/** im2cc list — 列出所有已注册对话 */
+/** connect 双参数模式: 按 ID 前缀搜索未注册的 session，注册并接入 */
+async function cmdConnectDoubleArg(newName: string, query: string): Promise<void> {
+  // 名称安全校验
+  if (!isValidSessionName(newName)) {
+    console.log('❌ 名称不合法，只允许字母、数字、连字符和下划线（1-64 字符）')
+    return
+  }
+
+  // 检查名称是否已注册
+  const existing = lookup(newName)
+  if (existing) {
+    console.log(`"${newName}" 已注册。用 im2cc connect ${newName} 直接接入。`)
+    return
+  }
+
+  // 搜索匹配的 session 文件
+  const matches = await findSession(query)
+
+  if (matches.length === 0) {
+    console.log(`❌ 未找到匹配 "${query}" 的对话`)
+    return
+  }
+
+  if (matches.length > 1) {
+    console.log(`多个对话匹配:`)
+    for (const m of matches.slice(0, 5)) {
+      console.log(`  ${m.sessionId.slice(0, 8)} ${m.name} (${m.projectName})`)
+    }
+    console.log('请用更精确的 ID 前缀')
+    return
+  }
+
+  const match = matches[0]
+  const sessionId = match.sessionId
+  const cwd = match.projectPath
+
+  if (!cwd) {
+    console.log('❌ 无法还原项目路径')
+    return
+  }
+
+  // 验证 session 文件位置（使用 Claude driver，因为 discover 只支持 Claude）
+  const driver = getDriver('claude')
+  const fileStatus = driver.checkSessionFile(sessionId, cwd)
+
+  if (fileStatus === 'elsewhere') {
+    console.log(`❌ session ${sessionId.slice(0, 8)} 存在于错误的项目目录`)
+    return
+  }
+
+  // 注册
+  register(newName, sessionId, cwd, 'claude')
+  console.log(`✅ 已注册 "${newName}" → ${path.basename(cwd)} [${sessionId.slice(0, 8)}]`)
+
+  // 解绑远程端
+  await releaseRemoteBinding(sessionId, newName)
+
+  // 创建 tmux session
+  const tmuxSession = `im2cc-claude-${newName}`
+  const cmdArgs = fileStatus === 'here'
+    ? toolResumeArgs('claude', sessionId, newName)
+    : toolCreateArgs('claude', sessionId, newName)
+
+  try {
+    execFileSync('tmux', [
+      'new-session', '-d', '-s', tmuxSession, '-c', cwd,
+      ...cmdArgs,
+    ])
+    tmuxConnect(tmuxSession)
+  } catch {
+    execFileSync(cmdArgs[0], cmdArgs.slice(1), { stdio: 'inherit', cwd })
+  }
+}
+
+/** im2cc list — 列出所有已注册对话（含 tmux 状态和工具标签） */
 function cmdList(): void {
   const all = listRegistered()
   if (all.length === 0) {
@@ -314,13 +534,78 @@ function cmdList(): void {
   console.log('已注册的对话:')
   console.log('─'.repeat(50))
   for (const s of all) {
-    console.log(`  📛 ${s.name}`)
-    console.log(`     📁 ${path.basename(s.cwd)} (${s.cwd})`)
-    console.log(`     打开: im2cc open ${s.name}`)
-    console.log(`     飞书: /attach ${s.name}`)
-    console.log('─'.repeat(50))
+    const tmux = findTmuxSession(s.name, s.tool)
+    const status = tmux ? '🟢 活跃' : '⬤ 休眠'
+    const toolTag = s.tool && s.tool !== 'claude' ? ` [${s.tool}]` : ''
+    console.log(`  ${status}  ${s.name}  (${path.basename(s.cwd)})${toolTag}  [${s.sessionId.slice(0, 8)}]`)
   }
 }
+
+/** im2cc delete <名称> — 终止 tmux session 并从注册表删除 */
+function cmdDelete(): void {
+  const name = process.argv[3]
+  if (!name) {
+    console.log('用法: im2cc delete <名称>')
+    return
+  }
+
+  const session = lookup(name)
+  if (!session) {
+    console.log(`未找到 "${name}"`)
+    return
+  }
+
+  // Kill tmux（兼容新旧命名格式）
+  const tmux = findTmuxSession(session.name, session.tool)
+  if (tmux) {
+    try {
+      execFileSync('tmux', ['kill-session', '-t', tmux], { stdio: 'ignore' })
+      console.log('✅ 已终止 tmux 会话')
+    } catch { /* 忽略 */ }
+  }
+
+  remove(session.name)
+  console.log(`✅ 已删除 "${session.name}"`)
+  console.log(`   如需恢复: claude --resume ${session.sessionId}`)
+}
+
+/** im2cc detach — 从当前 tmux 会话断开 */
+function cmdDetach(): void {
+  try {
+    execFileSync('tmux', ['detach-client'], { stdio: 'inherit' })
+  } catch {
+    console.log('不在 tmux 会话中')
+  }
+}
+
+/** im2cc show [名称] — 查看对话详情 */
+function cmdShow(): void {
+  const name = process.argv[3]
+  if (!name) {
+    cmdList()
+    return
+  }
+
+  const session = lookup(name)
+  if (!session) {
+    console.log(`未找到 "${name}"`)
+    return
+  }
+
+  const toolTag = session.tool && session.tool !== 'claude' ? ` [${session.tool}]` : ''
+  const tmux = findTmuxSession(session.name, session.tool)
+
+  console.log(`📊 ${session.name}${toolTag}`)
+  console.log(`  📁 ${path.basename(session.cwd)} (${session.cwd})`)
+  console.log(`  🔑 ${session.sessionId}`)
+  console.log(`  ${tmux ? '🟢 tmux: 活跃' : '⬤ tmux: 休眠'}`)
+  console.log('')
+  console.log(`  打开: im2cc connect ${session.name}`)
+  console.log(`  飞书/微信: /fc ${session.name}`)
+  console.log(`  终止: im2cc delete ${session.name}`)
+}
+
+// ─── 配置/运维命令 ───────────────────────────────────
 
 async function cmdSetup(): Promise<void> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
