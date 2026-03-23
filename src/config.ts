@@ -87,6 +87,28 @@ export function getInflightDir(): string {
 }
 export function getPendingFile(): string { ensureDirs(); return PENDING_FILE }
 
+// --- Telegram 配置（存在 config.json 的 telegramBotToken 字段中） ---
+
+export function loadTelegramBotToken(): string | null {
+  const config = loadConfig()
+  const token = (config as unknown as Record<string, unknown>).telegramBotToken as string
+  return token || null
+}
+
+// --- 钉钉配置（存在 config.json 的 dingtalk 字段中） ---
+
+export interface DingTalkBotConfig {
+  clientId: string
+  clientSecret: string
+}
+
+export function loadDingTalkConfig(): DingTalkBotConfig | null {
+  const config = loadConfig()
+  const dt = (config as unknown as Record<string, unknown>).dingtalk as Record<string, string> | undefined
+  if (!dt?.clientId || !dt?.clientSecret) return null
+  return { clientId: dt.clientId, clientSecret: dt.clientSecret }
+}
+
 // --- 微信账号配置 ---
 
 const WECHAT_ACCOUNT_FILE = path.join(CONFIG_DIR, 'wechat-account.json')
