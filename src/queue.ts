@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import type { ChildProcess } from 'node:child_process'
-import { sendMessage, interrupt } from './claude-driver.js'
+import { getDriver, getDefaultDriver } from './tool-driver.js'
 import { getBinding, updateBinding } from './session.js'
 import { getInflightDir, getPendingFile } from './config.js'
 import { formatOutput, formatError } from './output.js'
@@ -188,7 +188,8 @@ async function processNext(
 
   let streamed = false
   try {
-    const output = await sendMessage(
+    const driver = getDriver(binding.tool ?? 'claude')
+    const output = await driver.sendMessage(
       binding.sessionId,
       msg.text,
       binding.cwd,
@@ -232,7 +233,7 @@ export async function handleStop(conversationId: string): Promise<string> {
     return '当前没有执行中的任务'
   }
   group.state = 'cancelling'
-  await interrupt(group.currentChild)
+  await getDefaultDriver().interrupt(group.currentChild)
   // 不在此处设置 idle — processNext 的 finally 块会负责状态转换
   return '✅ 已中断当前任务'
 }

@@ -26,14 +26,15 @@ reg = json.load(open('$_IM2CC_REGISTRY'))
 name = '$1'
 if name in reg:
     s = reg[name]
-    print(f\"{s['sessionId']}|{s['cwd']}\")
+    tool = s.get('tool', 'claude')
+    print(f\"{s['sessionId']}|{s['cwd']}|{tool}\")
 else:
     sys.exit(1)
 " 2>/dev/null
 }
 
 _im2cc_register() {
-  local name="$1" session_id="$2" cwd="$3"
+  local name="$1" session_id="$2" cwd="$3" tool="${4:-claude}"
   _im2cc_ensure_registry
   python3 -c "
 import json, os, sys
@@ -49,6 +50,7 @@ for n, data in reg.items():
 reg['$name'] = {
     'sessionId': '$session_id',
     'cwd': '$cwd',
+    'tool': '$tool',
     'createdAt': reg.get('$name', {}).get('createdAt', datetime.now().isoformat()),
     'lastUsedAt': datetime.now().isoformat()
 }
@@ -166,14 +168,27 @@ if changed:
 
 # --- 用户命令 ---
 
-# fn <name> [path] — 创建新对话
+# fn [--tool <tool>] <name> [path] — 创建新对话
 fn() {
-  local name="${1:?用法: fn <名称> [路径]}"
+  local tool="claude"
+  # 解析 --tool 参数
+  if [[ "$1" == "--tool" ]]; then
+    tool="$2"
+    shift 2
+  fi
+
+  local name="${1:?用法: fn [--tool <工具>] <名称> [路径]}"
   local dir="${2:-$(pwd)}"
 
   # 名称安全校验（防注入）
   if [[ ! "$name" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$ ]]; then
     echo "❌ 名称不合法，只允许字母、数字、连字符和下划线"
+    return 1
+  fi
+
+  # 检查工具是否可用
+  if ! command -v "$tool" &>/dev/null && [[ "$tool" != "claude" ]]; then
+    echo "❌ 工具 \"$tool\" 未安装"
     return 1
   fi
 
@@ -188,29 +203,42 @@ fn() {
     return 1
   fi
 
-  # 同名 tmux session 冲突处理
-  local tmux_name="${_IM2CC_TMUX_PREFIX}${name}"
+  # tmux 命名：im2cc-{tool}-{name}
+  local tmux_name="${_IM2CC_TMUX_PREFIX}${tool}-${name}"
   if tmux has-session -t "$tmux_name" 2>/dev/null; then
     echo "tmux 会话 $tmux_name 已存在，先终止..."
     tmux kill-session -t "$tmux_name"
+  fi
+  # 兼容旧格式 tmux session
+  local old_tmux="${_IM2CC_TMUX_PREFIX}${name}"
+  if tmux has-session -t "$old_tmux" 2>/dev/null; then
+    tmux kill-session -t "$old_tmux"
   fi
 
   # 生成 UUID
   local session_id
   session_id="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 
-  # 注册
-  _im2cc_register "$name" "$session_id" "$dir"
+  # 注册（带 tool）
+  _im2cc_register "$name" "$session_id" "$dir" "$tool"
 
-  # 在 tmux 中启动 Claude Code（首次用 --session-id 创建 session）
+  # 在 tmux 中启动工具
+  local tool_label=""
+  if [[ "$tool" != "claude" ]]; then tool_label=" [$tool]"; fi
   tmux new-session -d -s "$tmux_name" -c "$dir" \
-    "claude --session-id $session_id --dangerously-skip-permissions --name 'im2cc:${name}'"
+    "$tool --session-id $session_id --dangerously-skip-permissions --name 'im2cc:${name}'"
 
-  echo "✅ 创建对话 \"$name\" → $(basename "$dir")"
-  echo "   飞书: /attach $name"
+  echo "✅ 创建对话 \"$name\"${tool_label} → $(basename "$dir")"
+  echo "   飞书/微信: /fc $name"
 
   _im2cc_connect "$tmux_name"
 }
+
+# --- fn-xxx 别名 ---
+fn-codex() { fn --tool codex "$@"; }
+fn-kimi()  { fn --tool kimi "$@"; }
+fn-gemini(){ fn --tool gemini "$@"; }
+fn-cline() { fn --tool cline "$@"; }
 
 # fc [name] [session-query] — 接入已有对话 / 注册并接入未注册对话
 fc() {
@@ -340,27 +368,38 @@ else:
   local info
   info="$(_im2cc_read_session "$name")" || { echo "❌ 未找到 \"$name\"。用 fl 查看列表。"; return 1; }
 
-  local session_id="${info%%|*}"
-  local cwd="${info##*|}"
-  local tmux_name="${_IM2CC_TMUX_PREFIX}${name}"
+  # 解析 sessionId|cwd|tool
+  local session_id cwd tool
+  session_id="$(echo "$info" | cut -d'|' -f1)"
+  cwd="$(echo "$info" | cut -d'|' -f2)"
+  tool="$(echo "$info" | cut -d'|' -f3)"
+  [[ -z "$tool" ]] && tool="claude"
 
-  # 独占：解绑飞书端（如果该 session 正被飞书使用）
+  local tmux_name="${_IM2CC_TMUX_PREFIX}${tool}-${name}"
+
+  # 独占：解绑远程端
   _im2cc_release_remote "$session_id" "$name"
 
-  # 如果 tmux session 已存在，直接 attach
+  # 如果 tmux session 已存在（新格式或旧格式），直接 attach
   if tmux has-session -t "$tmux_name" 2>/dev/null; then
     echo "接入 \"$name\" (活跃)"
     _im2cc_connect "$tmux_name"
     return
   fi
+  # 兼容旧格式
+  local old_tmux="${_IM2CC_TMUX_PREFIX}${name}"
+  if tmux has-session -t "$old_tmux" 2>/dev/null; then
+    echo "接入 \"$name\" (活跃)"
+    _im2cc_connect "$old_tmux"
+    return
+  fi
 
-  # tmux session 不存在，重新打开 — 先验证 session 文件位置
+  # tmux session 不存在，重新打开
   _im2cc_check_session_file "$session_id" "$cwd"
   local check_result=$?
 
   if [[ $check_result -eq 1 ]]; then
     echo "❌ session ${session_id:0:8} 存在于错误的项目目录"
-    echo "   registry 中 cwd=$cwd 与 session 文件位置不匹配"
     echo "   请 fk $name 后重新 fn"
     return 1
   fi
@@ -372,7 +411,7 @@ else:
 
   echo "恢复 \"$name\" → $(basename "$cwd")"
   tmux new-session -d -s "$tmux_name" -c "$cwd" \
-    "claude $session_flag $session_id --dangerously-skip-permissions --name 'im2cc:${name}'"
+    "$tool $session_flag $session_id --dangerously-skip-permissions --name 'im2cc:${name}'"
 
   _im2cc_connect "$tmux_name"
 }
@@ -381,7 +420,7 @@ else:
 fl() {
   _im2cc_ensure_registry
   python3 -c "
-import json, os
+import json, os, subprocess
 reg = json.load(open('$_IM2CC_REGISTRY'))
 if not reg:
     print('没有已注册的对话。用 fn <名称> 创建。')
@@ -390,13 +429,17 @@ else:
         cwd = data.get('cwd', '')
         proj = os.path.basename(cwd)
         sid = data.get('sessionId', '')[:8]
-        # 检查 tmux 状态
-        import subprocess
-        tmux_name = '${_IM2CC_TMUX_PREFIX}' + name
-        alive = subprocess.run(['tmux', 'has-session', '-t', tmux_name],
-                               capture_output=True).returncode == 0
+        tool = data.get('tool', 'claude')
+        # 检查 tmux 状态（新格式 + 旧格式兼容）
+        tmux_new = '${_IM2CC_TMUX_PREFIX}' + tool + '-' + name
+        tmux_old = '${_IM2CC_TMUX_PREFIX}' + name
+        alive = (subprocess.run(['tmux', 'has-session', '-t', tmux_new],
+                                capture_output=True).returncode == 0 or
+                 subprocess.run(['tmux', 'has-session', '-t', tmux_old],
+                                capture_output=True).returncode == 0)
         status = '🟢 活跃' if alive else '⬤ 休眠'
-        print(f'  {status}  {name}  ({proj})  [{sid}]')
+        tool_tag = f'  [{tool}]' if tool != 'claude' else ''
+        print(f'  {status}  {name}  ({proj}){tool_tag}  [{sid}]')
 " 2>/dev/null
 }
 
@@ -439,15 +482,22 @@ fs() {
   local info
   info="$(_im2cc_read_session "$name")" || { echo "未找到 \"$name\""; return 1; }
 
-  local session_id="${info%%|*}"
-  local cwd="${info##*|}"
-  local tmux_name="${_IM2CC_TMUX_PREFIX}${name}"
+  local session_id cwd tool
+  session_id="$(echo "$info" | cut -d'|' -f1)"
+  cwd="$(echo "$info" | cut -d'|' -f2)"
+  tool="$(echo "$info" | cut -d'|' -f3)"
+  [[ -z "$tool" ]] && tool="claude"
 
-  echo "📊 $name"
+  local tmux_name="${_IM2CC_TMUX_PREFIX}${tool}-${name}"
+  local old_tmux="${_IM2CC_TMUX_PREFIX}${name}"
+  local tool_label=""
+  [[ "$tool" != "claude" ]] && tool_label=" [$tool]"
+
+  echo "📊 $name${tool_label}"
   echo "  📁 $(basename "$cwd") ($cwd)"
   echo "  🔑 $session_id"
 
-  if tmux has-session -t "$tmux_name" 2>/dev/null; then
+  if tmux has-session -t "$tmux_name" 2>/dev/null || tmux has-session -t "$old_tmux" 2>/dev/null; then
     echo "  🟢 tmux: 活跃"
   else
     echo "  ⬤ tmux: 休眠"
@@ -455,6 +505,6 @@ fs() {
 
   echo ""
   echo "  打开: fc $name"
-  echo "  飞书: /attach $name"
+  echo "  飞书/微信: /fc $name"
   echo "  终止: fk $name"
 }

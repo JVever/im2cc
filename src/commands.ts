@@ -9,7 +9,8 @@ import type { Im2ccConfig } from './config.js'
 import type { TransportType } from './transport.js'
 import { validatePath, resolvePath, listProjects, isValidSessionName } from './security.js'
 import { createBinding, getBinding, archiveBinding, archiveBindingsBySession, updateBinding } from './session.js'
-import { createSession, getClaudeVersion, killLocalSession } from './claude-driver.js'
+import { getDriver, hasDriver, type ToolId } from './tool-driver.js'
+import { killLocalSession } from './claude-driver.js'
 import { handleStop, getQueueStatus } from './queue.js'
 import { discoverSessions, findSession } from './discover.js'
 import { register, lookup, search, listRegistered, touch, remove, updateRegistry } from './registry.js'
@@ -52,14 +53,11 @@ export async function handleCommand(
 }
 
 async function handleFn(args: string, conversationId: string, config: Im2ccConfig, transport: TransportType = 'feishu'): Promise<string> {
-  // 用法: /bind <名称> <项目>  — 创建新对话并注册
-  // 或:   /bind <名称>         — 如果名称就是项目目录名
-  // 或:   /bind                — 列出可用项目
   if (!args) {
     const projects = listProjects(config)
     if (projects.length === 0) return `${config.pathWhitelist.join(', ')} 下没有找到项目目录`
     const list = projects.map((p, i) => `  ${i + 1}. ${p}`).join('\n')
-    return `📁 可用项目:\n${list}\n\n用法: /fn <对话名称> [项目名]\n例如: /fn auth-refactor im2cc`
+    return `📁 可用项目:\n${list}\n\n用法: /fn <对话名称> [项目名] [--tool codex]\n例如: /fn auth-refactor im2cc`
   }
 
   const existing = getBinding(conversationId)
@@ -67,31 +65,47 @@ async function handleFn(args: string, conversationId: string, config: Im2ccConfi
     return `该群已连接到 "${path.basename(existing.cwd)}"\n先 /fd 再操作`
   }
 
-  const parts = args.split(/\s+/)
-  const sessionName = parts[0]
+  // 解析 --tool 参数
+  let tool: ToolId = 'claude'
+  const argParts = args.split(/\s+/)
+  const toolIdx = argParts.indexOf('--tool')
+  if (toolIdx !== -1 && argParts[toolIdx + 1]) {
+    tool = argParts[toolIdx + 1] as ToolId
+    argParts.splice(toolIdx, 2)
+  }
+
+  const sessionName = argParts[0]
+  if (!sessionName) return '用法: /fn <对话名称> [项目名] [--tool codex]'
   if (!isValidSessionName(sessionName)) {
     return `❌ 名称 "${sessionName}" 不合法\n只允许字母、数字、连字符和下划线`
   }
-  const projectHint = parts[1] || sessionName // 默认用对话名称作为项目名
+  const projectHint = argParts[1] || sessionName
 
-  // 解析项目路径
+  // 检查 driver 是否可用
+  if (!hasDriver(tool)) {
+    return `❌ 工具 "${tool}" 未注册\n当前可用: claude`
+  }
+  const driver = getDriver(tool)
+  if (!driver.isAvailable()) {
+    return `❌ ${tool} 未安装或不可用\n请先安装 ${tool} CLI`
+  }
+
   const resolved = resolvePath(projectHint, config)
   const validation = validatePath(resolved, config)
   if (!validation.valid) return `❌ ${validation.error}`
 
-  log(`[${conversationId}] 创建新对话 "${sessionName}" → ${validation.resolvedPath}`)
+  log(`[${conversationId}] 创建新对话 "${sessionName}" [${tool}] → ${validation.resolvedPath}`)
 
   try {
-    const cliVersion = getClaudeVersion()
-    const { sessionId } = await createSession(validation.resolvedPath, config.defaultPermissionMode, sessionName)
+    const cliVersion = driver.getVersion()
+    const { sessionId } = await driver.createSession(validation.resolvedPath, config.defaultPermissionMode, sessionName)
 
-    // 注册到 registry
-    register(sessionName, sessionId, validation.resolvedPath)
+    register(sessionName, sessionId, validation.resolvedPath, tool)
 
-    const binding = createBinding(conversationId, sessionId, validation.resolvedPath, config.defaultPermissionMode, cliVersion, transport)
+    const binding = createBinding(conversationId, sessionId, validation.resolvedPath, config.defaultPermissionMode, cliVersion, transport, tool)
 
     return [
-      `✅ 新对话 "${sessionName}"`,
+      `✅ 新对话 "${sessionName}"${tool !== 'claude' ? ` [${tool}]` : ''}`,
       `📁 ${path.basename(validation.resolvedPath)}`,
       `⚙️ 模式: ${binding.permissionMode}`,
       '',
@@ -191,18 +205,19 @@ async function listAvailableSessions(): Promise<string> {
 
 /** 接入已注册对话 */
 function connectToRegistered(
-  reg: { name: string; sessionId: string; cwd: string; permissionMode?: string },
+  reg: { name: string; sessionId: string; cwd: string; permissionMode?: string; tool?: ToolId },
   conversationId: string,
   config: Im2ccConfig,
   transport: TransportType = 'feishu',
 ): string {
+  const tool = (reg.tool ?? 'claude') as ToolId
   const killed = killLocalSession(reg.name)
-  // 跨 transport 独占：归档其他 transport 对同一 session 的绑定
   archiveBindingsBySession(reg.sessionId, conversationId)
-  const cliVersion = getClaudeVersion()
+  const driver = getDriver(tool)
+  const cliVersion = driver.getVersion()
   touch(reg.name)
   const mode = reg.permissionMode ?? config.defaultPermissionMode
-  const binding = createBinding(conversationId, reg.sessionId, reg.cwd, mode, cliVersion, transport)
+  const binding = createBinding(conversationId, reg.sessionId, reg.cwd, mode, cliVersion, transport, tool)
   log(`[${conversationId}] attach → "${reg.name}" (${reg.sessionId})${killed ? ' [已关闭本地进程]' : ''}`)
 
   const modeWarning = binding.permissionMode === 'YOLO'
@@ -227,10 +242,11 @@ function connectToDiscovered(
   config: Im2ccConfig,
   transport: TransportType = 'feishu',
 ): string {
-  const cliVersion = getClaudeVersion()
+  const driver = getDriver('claude')  // discovered sessions 目前只支持 claude
+  const cliVersion = driver.getVersion()
   archiveBindingsBySession(session.sessionId, conversationId)
-  const binding = createBinding(conversationId, session.sessionId, session.projectPath, config.defaultPermissionMode, cliVersion, transport)
-  register(name, session.sessionId, session.projectPath)
+  const binding = createBinding(conversationId, session.sessionId, session.projectPath, config.defaultPermissionMode, cliVersion, transport, 'claude')
+  register(name, session.sessionId, session.projectPath, 'claude')
   log(`[${conversationId}] attach (discovered) → "${name}" (${session.sessionId})`)
 
   const modeWarning = binding.permissionMode === 'YOLO'
@@ -343,7 +359,8 @@ function handleFl(): string {
   if (registered.length === 0) return '没有已注册的对话。用 /fn <名称> 创建。'
 
   const lines = registered.map(s => {
-    return `  ${s.name} (${path.basename(s.cwd)})`
+    const toolTag = s.tool && s.tool !== 'claude' ? ` [${s.tool}]` : ''
+    return `  ${s.name} (${path.basename(s.cwd)})${toolTag}`
   })
   return `📋 已注册的对话:\n${lines.join('\n')}`
 }

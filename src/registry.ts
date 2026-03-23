@@ -7,11 +7,13 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { getDataDir } from './config.js'
+import type { ToolId } from './tool-driver.js'
 
 export interface RegisteredSession {
   name: string
   sessionId: string
   cwd: string
+  tool: ToolId
   permissionMode?: string
   createdAt: string
   lastUsedAt: string
@@ -26,7 +28,12 @@ function registryFile(): string {
 function readRegistry(): Registry {
   const f = registryFile()
   if (!fs.existsSync(f)) return {}
-  return JSON.parse(fs.readFileSync(f, 'utf-8')) as Registry
+  const raw = JSON.parse(fs.readFileSync(f, 'utf-8')) as Registry
+  // 兼容旧数据：没有 tool 字段的默认 'claude'
+  for (const data of Object.values(raw)) {
+    if (!data.tool) (data as Record<string, unknown>).tool = 'claude'
+  }
+  return raw
 }
 
 function writeRegistry(reg: Registry): void {
@@ -45,7 +52,7 @@ function findBySessionId(reg: Registry, sessionId: string): string | null {
 }
 
 /** 注册一个命名 session（唯一性约束：同一 sessionId 不能被多个 name 持有） */
-export function register(name: string, sessionId: string, cwd: string): RegisteredSession {
+export function register(name: string, sessionId: string, cwd: string, tool: ToolId = 'claude'): RegisteredSession {
   const reg = readRegistry()
 
   const existingOwner = findBySessionId(reg, sessionId)
@@ -57,7 +64,7 @@ export function register(name: string, sessionId: string, cwd: string): Register
   }
 
   const now = new Date().toISOString()
-  reg[name] = { sessionId, cwd, createdAt: reg[name]?.createdAt ?? now, lastUsedAt: now }
+  reg[name] = { sessionId, cwd, tool, createdAt: reg[name]?.createdAt ?? now, lastUsedAt: now }
   writeRegistry(reg)
   return { name, ...reg[name] }
 }

@@ -9,12 +9,13 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { getDataDir } from './config.js'
 import type { TransportType } from './transport.js'
+import type { ToolId } from './tool-driver.js'
 
 export interface Binding {
   id: string
   transport: TransportType  // 'feishu' | 'wechat'
   conversationId: string    // 飞书群 ID / 微信用户标识
-  cli: 'claude'
+  tool: ToolId              // 'claude' | 'codex' | 'kimi' | ...
   sessionId: string
   cwd: string
   permissionMode: string
@@ -35,14 +36,18 @@ function readBindings(): Binding[] {
   if (!fs.existsSync(f)) return []
   const raw = JSON.parse(fs.readFileSync(f, 'utf-8')) as Array<Record<string, unknown>>
   return raw.map(b => {
-    // 兼容旧格式：feishuGroupId → conversationId，补 transport
+    // 兼容旧格式
     if ('feishuGroupId' in b && !('conversationId' in b)) {
       b.conversationId = b.feishuGroupId
       delete b.feishuGroupId
     }
-    if (!b.transport) {
-      b.transport = 'feishu'
+    if (!b.transport) b.transport = 'feishu'
+    // cli: 'claude' → tool: 'claude'
+    if ('cli' in b && !('tool' in b)) {
+      b.tool = (b.cli as string) || 'claude'
+      delete b.cli
     }
+    if (!b.tool) b.tool = 'claude'
     return b as unknown as Binding
   })
 }
@@ -62,6 +67,7 @@ export function createBinding(
   permissionMode: string,
   cliVersion: string,
   transport: TransportType = 'feishu',
+  tool: ToolId = 'claude',
 ): Binding {
   const bindings = readBindings()
 
@@ -76,7 +82,7 @@ export function createBinding(
     id: crypto.randomUUID(),
     transport,
     conversationId,
-    cli: 'claude',
+    tool,
     sessionId,
     cwd,
     permissionMode,
