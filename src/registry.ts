@@ -36,6 +36,8 @@ function readRegistry(): Registry {
   return raw
 }
 
+// Note: no file lock. Concurrent writes (daemon + session-sync hook)
+// use atomic rename to prevent corruption, but TOCTOU lost-update is possible.
 function writeRegistry(reg: Registry): void {
   const f = registryFile()
   const tmp = f + '.tmp.' + process.pid

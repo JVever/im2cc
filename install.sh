@@ -112,8 +112,12 @@ if [ -n "$SHELL_RC" ]; then
   else
     # 清理旧格式（source 外部文件的方式）
     if grep -q "im2cc" "$SHELL_RC" 2>/dev/null; then
-      sed -i.bak '/im2cc.*shell-functions/d; /# im2cc/d; /im2cc new/d; /im2cc connect/d; /im2cc list/d; /im2cc delete/d; /im2cc detach/d; /im2cc show/d; /fn-codex/d; /fn-kimi/d; /fn-gemini/d; /fn-cline/d' "$SHELL_RC"
-      rm -f "$SHELL_RC.bak"
+      # Cross-platform sed in-place
+      if [[ "$OSTYPE" == "darwin"* ]]; then
+        sed -i '' '/im2cc.*shell-functions/d; /# im2cc/d; /im2cc new/d; /im2cc connect/d; /im2cc list/d; /im2cc delete/d; /im2cc detach/d; /im2cc show/d; /fn-codex/d; /fn-kimi/d; /fn-gemini/d; /fn-cline/d' "$SHELL_RC"
+      else
+        sed -i '/im2cc.*shell-functions/d; /# im2cc/d; /im2cc new/d; /im2cc connect/d; /im2cc list/d; /im2cc delete/d; /im2cc detach/d; /im2cc show/d; /fn-codex/d; /fn-kimi/d; /fn-gemini/d; /fn-cline/d' "$SHELL_RC"
+      fi
     fi
     echo "" >> "$SHELL_RC"
     echo "# im2cc — 终端命令（薄包装，逻辑在 im2cc CLI 中）" >> "$SHELL_RC"

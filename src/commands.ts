@@ -378,9 +378,12 @@ function handleFk(args: string, conversationId: string): string {
 
   remove(session.name)
 
+  const toolHint = session.tool === 'claude'
+    ? `claude --resume ${session.sessionId}`
+    : `${session.tool} (session 已由 im2cc 管理)`
   return [
     `✅ 已终止 "${args}"`,
-    `如需恢复: claude --resume ${session.sessionId}`,
+    `如需恢复: ${toolHint}`,
   ].join('\n')
 }
 
@@ -394,10 +397,12 @@ function handleFs(conversationId: string): string {
 
   // 查找注册名称，给出正确的 fc 提示
   const regEntry = listRegistered().find(r => r.sessionId === binding.sessionId)
+  const sessionName = regEntry?.name ?? '(未注册)'
+  const toolTag = regEntry?.tool && regEntry.tool !== 'claude' ? ` [${regEntry.tool}]` : ''
   const hint = regEntry ? `fc ${regEntry.name}` : `fc <名称>`
 
   return [
-    `📊 ${projectName}`,
+    `📊 ${sessionName}${toolTag} — ${projectName}`,
     `  目录: ${binding.cwd}`,
     `  模式: ${binding.permissionMode.toUpperCase()}`,
     `  轮次: ${binding.turnCount}`,

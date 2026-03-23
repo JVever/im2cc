@@ -74,7 +74,10 @@ export function configExists(): boolean {
   if (c.feishu.appId !== '') return true
   // WeChat-only 配置也视为有效
   const wa = loadWeChatAccount()
-  return wa !== null && wa.botToken !== ''
+  if (wa !== null && wa.botToken !== '') return true
+  if (loadTelegramBotToken()) return true
+  if (loadDingTalkConfig()) return true
+  return false
 }
 
 export function getDataDir(): string { ensureDirs(); return DATA_DIR }

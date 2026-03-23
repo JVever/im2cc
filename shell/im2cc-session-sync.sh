@@ -16,8 +16,12 @@ tmux_name=$(tmux display-message -p '#{session_name}' 2>/dev/null)
 # 读取 stdin 中的 hook JSON
 input=$(cat)
 
-# 提取 im2cc session 名称
+# 提取 im2cc session 名称（兼容新格式 im2cc-{tool}-{name}）
 im2cc_name="${tmux_name#im2cc-}"
+# 新格式 im2cc-{tool}-{name}: 去掉 tool 前缀
+case "$im2cc_name" in
+  claude-*|codex-*|kimi-*|gemini-*|cline-*) im2cc_name="${im2cc_name#*-}" ;;
+esac
 registry="$HOME/.im2cc/data/registry.json"
 [[ -f "$registry" ]] || exit 0
 

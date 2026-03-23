@@ -8,7 +8,7 @@ import { MSG_LENGTH_LIMIT, type TransportType } from './transport.js'
 
 export function formatOutput(text: string, sessionId: string, transport: TransportType = 'feishu'): string {
   if (!text || text === '(无输出)') {
-    return '(Claude Code 无输出)'
+    return '(无输出)'
   }
 
   const maxLen = MSG_LENGTH_LIMIT[transport] ?? 28000

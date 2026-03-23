@@ -259,13 +259,14 @@ function cmdLogs(): void {
 function cmdSessions(): void {
   const bindings = listActiveBindings()
   if (bindings.length === 0) {
-    console.log('没有飞书活跃绑定')
+    console.log('没有活跃绑定')
     return
   }
 
-  console.log('飞书活跃绑定:')
+  console.log('活跃绑定:')
   for (const b of bindings) {
-    console.log(`  ${path.basename(b.cwd)} → ${b.sessionId.slice(0, 8)}...`)
+    const transportTag = b.transport && b.transport !== 'feishu' ? ` [${b.transport}]` : ''
+    console.log(`  ${path.basename(b.cwd)} → ${b.sessionId.slice(0, 8)}...${transportTag}`)
   }
 }
 
@@ -665,13 +666,8 @@ function cmdInstallService(): void {
   const plistDir = path.join(os.homedir(), 'Library/LaunchAgents')
   const plistFile = path.join(plistDir, 'com.im2cc.daemon.plist')
 
-  // 找到 im2cc 的安装路径
-  let binPath: string
-  try {
-    binPath = execSync('which im2cc', { encoding: 'utf-8' }).trim()
-  } catch {
-    binPath = path.resolve(import.meta.dirname, '../../dist/bin/im2cc.js')
-  }
+  // 直接运行 daemon 入口（避免 CLI start 的 double-fork）
+  const mainModule = path.resolve(import.meta.dirname, '../src/index.js')
 
   const logDir = getLogDir()
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
@@ -683,8 +679,7 @@ function cmdInstallService(): void {
   <key>ProgramArguments</key>
   <array>
     <string>${process.execPath}</string>
-    <string>${binPath}</string>
-    <string>start</string>
+    <string>${mainModule}</string>
   </array>
   <key>RunAtLoad</key>
   <true/>

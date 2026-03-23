@@ -15,13 +15,12 @@ import { log, error } from './logger.js'
 
 interface BotChat { chatId: string }
 
-let cachedChats: BotChat[] = []
-let chatsCachedAt = 0
-const CHAT_CACHE_TTL = 5 * 60 * 1000
-
 export class FeishuAdapter implements TransportAdapter {
   readonly type = 'feishu' as const
   private client: lark.Client
+  private cachedChats: BotChat[] = []
+  private chatsCachedAt = 0
+  private readonly CHAT_CACHE_TTL = 5 * 60 * 1000
 
   constructor(private config: Im2ccConfig) {
     const { appId, appSecret } = config.feishu
@@ -141,8 +140,8 @@ export class FeishuAdapter implements TransportAdapter {
   // --- 内部方法 ---
 
   private async refreshBotGroups(): Promise<BotChat[]> {
-    if (Date.now() - chatsCachedAt < CHAT_CACHE_TTL && cachedChats.length > 0) {
-      return cachedChats
+    if (Date.now() - this.chatsCachedAt < this.CHAT_CACHE_TTL && this.cachedChats.length > 0) {
+      return this.cachedChats
     }
 
     const chats: BotChat[] = []
@@ -158,8 +157,8 @@ export class FeishuAdapter implements TransportAdapter {
       pageToken = resp?.data?.has_more ? resp?.data?.page_token : undefined
     } while (pageToken)
 
-    cachedChats = chats
-    chatsCachedAt = Date.now()
+    this.cachedChats = chats
+    this.chatsCachedAt = Date.now()
     log(`[feishu] 刷新群列表: ${chats.length} 个会话`)
     return chats
   }
