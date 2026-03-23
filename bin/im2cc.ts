@@ -406,9 +406,18 @@ function cmdDoctor(): void {
   console.log('im2cc 环境检查')
   console.log('─'.repeat(40))
 
-  // Claude Code
+  // AI 编程工具
   const claudeVersion = getClaudeVersion()
-  console.log(`Claude Code: ${claudeVersion === 'unknown' ? '❌ 未找到' : '✅ ' + claudeVersion}`)
+  console.log(`claude: ${claudeVersion === 'unknown' ? '⬤ 未安装' : '✅ ' + claudeVersion}`)
+  // 检查其他工具（简单的 which 检查）
+  for (const tool of ['codex', 'kimi', 'gemini', 'cline']) {
+    try {
+      const ver = execFileSync(tool, ['--version'], { encoding: 'utf-8', timeout: 5000 }).trim()
+      console.log(`${tool}: ✅ ${ver}`)
+    } catch {
+      console.log(`${tool}: ⬤ 未安装`)
+    }
+  }
 
   // Node.js
   console.log(`Node.js: ✅ ${process.version}`)

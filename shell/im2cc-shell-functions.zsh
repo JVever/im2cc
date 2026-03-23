@@ -82,6 +82,32 @@ _im2cc_connect() {
   fi
 }
 
+# 根据工具类型生成创建 session 的 tmux 命令
+_im2cc_tool_create_cmd() {
+  local tool="$1" session_id="$2" name="$3"
+  case "$tool" in
+    claude) echo "claude --session-id $session_id --dangerously-skip-permissions --name 'im2cc:${name}'" ;;
+    codex)  echo "codex exec --json --full-auto '会话已建立。请回复就绪。'" ;;
+    kimi)   echo "kimi --print -p '会话已建立。请回复就绪。' --output-format=stream-json" ;;
+    gemini) echo "gemini -p '会话已建立。请回复就绪。' --output-format json -y" ;;
+    cline)  echo "cline -y --json '会话已建立。请回复就绪。'" ;;
+    *)      echo "$tool --session-id $session_id" ;;
+  esac
+}
+
+# 根据工具类型生成恢复 session 的 tmux 命令
+_im2cc_tool_resume_cmd() {
+  local tool="$1" session_id="$2" name="$3"
+  case "$tool" in
+    claude) echo "claude --resume $session_id --dangerously-skip-permissions --name 'im2cc:${name}'" ;;
+    codex)  echo "codex exec resume $session_id --json --full-auto" ;;
+    kimi)   echo "kimi --session $session_id --print --output-format=stream-json" ;;
+    gemini) echo "gemini --resume $session_id -y --output-format json" ;;
+    cline)  echo "cline -y --resume $session_id --json" ;;
+    *)      echo "$tool --resume $session_id" ;;
+  esac
+}
+
 # session 文件位置检查: exit 0=here(正确位置), 1=elsewhere(错误位置), 2=missing(不存在)
 _im2cc_check_session_file() {
   local sid="$1" cwd="$2"
@@ -222,11 +248,12 @@ fn() {
   # 注册（带 tool）
   _im2cc_register "$name" "$session_id" "$dir" "$tool"
 
-  # 在 tmux 中启动工具
+  # 在 tmux 中启动工具（通过映射函数获取正确的 CLI 命令）
   local tool_label=""
   if [[ "$tool" != "claude" ]]; then tool_label=" [$tool]"; fi
-  tmux new-session -d -s "$tmux_name" -c "$dir" \
-    "$tool --session-id $session_id --dangerously-skip-permissions --name 'im2cc:${name}'"
+  local create_cmd
+  create_cmd="$(_im2cc_tool_create_cmd "$tool" "$session_id" "$name")"
+  tmux new-session -d -s "$tmux_name" -c "$dir" "$create_cmd"
 
   echo "✅ 创建对话 \"$name\"${tool_label} → $(basename "$dir")"
   echo "   飞书/微信: /fc $name"
@@ -410,8 +437,13 @@ else:
   fi
 
   echo "恢复 \"$name\" → $(basename "$cwd")"
-  tmux new-session -d -s "$tmux_name" -c "$cwd" \
-    "$tool $session_flag $session_id --dangerously-skip-permissions --name 'im2cc:${name}'"
+  local resume_cmd
+  if [[ "$session_flag" == "--session-id" ]]; then
+    resume_cmd="$(_im2cc_tool_create_cmd "$tool" "$session_id" "$name")"
+  else
+    resume_cmd="$(_im2cc_tool_resume_cmd "$tool" "$session_id" "$name")"
+  fi
+  tmux new-session -d -s "$tmux_name" -c "$cwd" "$resume_cmd"
 
   _im2cc_connect "$tmux_name"
 }

@@ -14,6 +14,12 @@ import { isDuplicate, listActiveBindings, getBinding, archiveBinding } from './s
 import { parseCommand, handleCommand } from './commands.js'
 import { enqueue, recoverOnStartup } from './queue.js'
 import { FeishuAdapter } from './feishu.js'
+// 导入所有 tool driver（每个文件末尾自动注册到全局 driver 注册表）
+import './claude-driver.js'
+import './codex-driver.js'
+import './kimi-driver.js'
+import './gemini-driver.js'
+import './cline-driver.js'
 import { listRegistered } from './registry.js'
 import { buildRecap } from './recap.js'
 import { stageFile, consumeStaged, ensureInbox, classifyFile, runInboxCleanup } from './file-staging.js'
