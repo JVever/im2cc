@@ -111,25 +111,32 @@ function findTmuxSession(name: string, tool: string = 'claude'): string | null {
 // ─── 工具 → tmux 交互式命令映射 ─────────────────────
 
 /** 生成创建 session 的 tmux 命令参数（交互模式） */
+/**
+ * 工具创建 session 的交互式 CLI 参数（用于 tmux，保持打开等用户输入）。
+ * 注意：与 driver 的 createSession（headless 非交互模式）不同！
+ */
 function toolCreateArgs(tool: ToolId, sessionId: string, name: string): string[] {
   switch (tool) {
     case 'claude': return ['claude', '--session-id', sessionId, '--dangerously-skip-permissions', '--name', `im2cc:${name}`]
-    case 'codex':  return ['codex', 'exec', '--json', '--full-auto', '会话已建立。请回复就绪。']
-    case 'kimi':   return ['kimi', '--print', '-p', '会话已建立。请回复就绪。', '--output-format=stream-json']
-    case 'gemini': return ['gemini', '-p', '会话已建立。请回复就绪。', '--output-format', 'json', '-y']
-    case 'cline':  return ['cline', '-y', '--json', '会话已建立。请回复就绪。']
-    default:       return [tool, '--session-id', sessionId]
+    case 'codex':  return ['codex']   // 交互 REPL
+    case 'kimi':   return ['kimi']    // 交互模式
+    case 'gemini': return ['gemini']  // 交互模式
+    case 'cline':  return ['cline']   // 交互模式
+    default:       return [tool]
   }
 }
 
-/** 生成恢复 session 的 tmux 命令参数（交互模式） */
+/**
+ * 工具恢复 session 的交互式 CLI 参数（用于 tmux）。
+ * Claude 支持精确 --resume <id>，其他工具用各自的 resume 方式。
+ */
 function toolResumeArgs(tool: ToolId, sessionId: string, name: string): string[] {
   switch (tool) {
     case 'claude': return ['claude', '--resume', sessionId, '--dangerously-skip-permissions', '--name', `im2cc:${name}`]
-    case 'codex':  return ['codex', 'exec', 'resume', sessionId, '--json', '--full-auto']
-    case 'kimi':   return ['kimi', '--session', sessionId, '--print', '--output-format=stream-json']
-    case 'gemini': return ['gemini', '--resume', sessionId, '-y', '--output-format', 'json']
-    case 'cline':  return ['cline', '-y', '--resume', sessionId, '--json']
+    case 'codex':  return ['codex', '--resume']              // 恢复最近 session
+    case 'kimi':   return ['kimi', '--session', sessionId]   // 恢复指定 session
+    case 'gemini': return ['gemini', '--resume', sessionId]  // 恢复指定 session
+    case 'cline':  return ['cline', '--resume', sessionId]   // 恢复指定 session
     default:       return [tool, '--resume', sessionId]
   }
 }
