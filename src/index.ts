@@ -26,12 +26,16 @@ import { stageFile, consumeStaged, ensureInbox, classifyFile, runInboxCleanup } 
 import { log, error } from './logger.js'
 import type { TransportAdapter, IncomingMessage, TransportType } from './transport.js'
 
-/** 检查某个 session 是否正在被本地 tmux 使用 */
-function isSessionLocallyActive(sessionName: string): boolean {
-  try {
-    execFileSync('tmux', ['has-session', '-t', `im2cc-${sessionName}`], { stdio: 'ignore' })
-    return true
-  } catch { return false }
+/** 检查某个 session 是否正在被本地 tmux 使用（兼容新旧 tmux 命名格式） */
+function isSessionLocallyActive(sessionName: string, tool: string = 'claude'): boolean {
+  const names = [`im2cc-${tool}-${sessionName}`, `im2cc-${sessionName}`]
+  for (const n of names) {
+    try {
+      execFileSync('tmux', ['has-session', '-t', n], { stdio: 'ignore' })
+      return true
+    } catch {}
+  }
+  return false
 }
 
 /** 单实例保护：确保只有一个守护进程在运行 */
@@ -215,7 +219,7 @@ export async function startDaemon(): Promise<void> {
       const regEntry = listRegistered().find(r =>
         r.sessionId === binding.sessionId && r.cwd === binding.cwd
       ) ?? listRegistered().find(r => r.sessionId === binding.sessionId)
-      if (regEntry && isSessionLocallyActive(regEntry.name)) {
+      if (regEntry && isSessionLocallyActive(regEntry.name, regEntry.tool)) {
         archiveBinding(conversationId)
         log(`[${conversationId}] 检测到 "${regEntry.name}" 在电脑端活跃，自动解绑`)
         await send(

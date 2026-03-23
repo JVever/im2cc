@@ -10,7 +10,6 @@ import type { TransportType } from './transport.js'
 import { validatePath, resolvePath, listProjects, isValidSessionName } from './security.js'
 import { createBinding, getBinding, archiveBinding, archiveBindingsBySession, updateBinding } from './session.js'
 import { getDriver, hasDriver, type ToolId } from './tool-driver.js'
-import { killLocalSession } from './claude-driver.js'
 import { handleStop, getQueueStatus } from './queue.js'
 import { discoverSessions, findSession } from './discover.js'
 import { register, lookup, search, listRegistered, touch, remove, updateRegistry } from './registry.js'
@@ -211,7 +210,7 @@ function connectToRegistered(
   transport: TransportType = 'feishu',
 ): string {
   const tool = (reg.tool ?? 'claude') as ToolId
-  const killed = killLocalSession(reg.name)
+  const killed = getDriver(tool).killLocalSession(reg.name, tool)
   archiveBindingsBySession(reg.sessionId, conversationId)
   const driver = getDriver(tool)
   const cliVersion = driver.getVersion()
@@ -372,15 +371,12 @@ function handleFk(args: string, conversationId: string): string {
   if (!session) return `未找到 "${args}"`
 
   // 关闭本地 tmux
-  killLocalSession(session.name)
+  getDriver((session.tool ?? 'claude') as ToolId).killLocalSession(session.name, session.tool)
 
-  // 如果飞书绑定了这个 session，解绑
-  const binding = getBinding(conversationId)
-  if (binding && binding.sessionId === session.sessionId) {
-    archiveBinding(conversationId)
-  }
+  // 归档所有绑定了这个 session 的端（跨 transport）
+  archiveBindingsBySession(session.sessionId)
 
-  remove(args)
+  remove(session.name)
 
   return [
     `✅ 已终止 "${args}"`,
