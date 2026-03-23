@@ -94,8 +94,20 @@ elif [ -f "$HOME/.bashrc" ]; then
 fi
 
 if [ -n "$SHELL_RC" ]; then
-  if grep -q "im2cc-shell-functions" "$SHELL_RC" 2>/dev/null; then
+  if grep -q "source.*$SHELL_SCRIPT" "$SHELL_RC" 2>/dev/null; then
+    # 已指向当前项目的正确路径
     ok "终端命令已配置 (fn/fc/fl/fk/fd/fs)"
+  elif grep -q "im2cc-shell-functions" "$SHELL_RC" 2>/dev/null; then
+    # 有旧路径，替换为当前项目路径
+    # 先移除旧的 source 行和注释行
+    sed -i.bak '/im2cc.*shell-functions/d' "$SHELL_RC"
+    sed -i.bak '/# im2cc —/d' "$SHELL_RC"
+    rm -f "$SHELL_RC.bak"
+    echo "" >> "$SHELL_RC"
+    echo "# im2cc — 终端命令 (fn/fc/fl/fk/fd/fs)" >> "$SHELL_RC"
+    echo "source \"$SHELL_SCRIPT\"" >> "$SHELL_RC"
+    ok "终端命令已更新为当前项目路径"
+    warn "请重新打开终端或运行: source $SHELL_RC"
   else
     echo "" >> "$SHELL_RC"
     echo "# im2cc — 终端命令 (fn/fc/fl/fk/fd/fs)" >> "$SHELL_RC"
