@@ -11,24 +11,52 @@ import type { WeChatAccount } from './config.js'
 import { saveWeChatAccount, getDataDir } from './config.js'
 import { log, error } from './logger.js'
 
-// --- context_token 持久化 ---
+// --- context_token 持久化（含有效期和使用计数追踪）---
 
 const CTX_TOKEN_FILE = () => path.join(getDataDir(), 'wechat-ctx-tokens.json')
 
-function loadContextTokens(): Map<string, string> {
+/** context_token 约 10 条消息后失效 */
+const MAX_TOKEN_USES = 8  // 留 2 条余量
+/** context_token 24 小时后可能被微信静默丢弃 */
+const TOKEN_TTL_MS = 23 * 60 * 60 * 1000  // 23 小时（留 1 小时余量）
+
+interface TokenEntry {
+  token: string
+  receivedAt: number  // 收到用户消息的时间戳
+  useCount: number    // 已用此 token 发送的消息数
+}
+
+function loadContextTokens(): Map<string, TokenEntry> {
   try {
-    const data = JSON.parse(fs.readFileSync(CTX_TOKEN_FILE(), 'utf-8')) as Record<string, string>
-    return new Map(Object.entries(data))
+    const data = JSON.parse(fs.readFileSync(CTX_TOKEN_FILE(), 'utf-8')) as Record<string, unknown>
+    const map = new Map<string, TokenEntry>()
+    for (const [key, val] of Object.entries(data)) {
+      if (typeof val === 'string') {
+        // 兼容旧格式（纯 string token）
+        map.set(key, { token: val, receivedAt: Date.now(), useCount: 0 })
+      } else if (val && typeof val === 'object') {
+        map.set(key, val as TokenEntry)
+      }
+    }
+    return map
   } catch { return new Map() }
 }
 
-function saveContextTokens(tokens: Map<string, string>): void {
+function saveContextTokens(tokens: Map<string, TokenEntry>): void {
   const file = CTX_TOKEN_FILE()
   const tmp = file + '.tmp'
   try {
     fs.writeFileSync(tmp, JSON.stringify(Object.fromEntries(tokens)))
     fs.renameSync(tmp, file)
   } catch { /* 非关键路径 */ }
+}
+
+/** 检查 token 是否仍然可用 */
+function isTokenValid(entry: TokenEntry | undefined): boolean {
+  if (!entry) return false
+  if (entry.useCount >= MAX_TOKEN_USES) return false
+  if (Date.now() - entry.receivedAt > TOKEN_TTL_MS) return false
+  return true
 }
 
 /** iLink 请求头（每次请求需要新的 X-WECHAT-UIN） */
@@ -61,13 +89,12 @@ export class WeChatAdapter implements TransportAdapter {
   readonly type = 'wechat' as const
   private account: WeChatAccount
   private syncBuf: string
-  private contextTokens = new Map<string, string>()  // userId → 最新 context_token
+  private contextTokens: Map<string, TokenEntry>
   private tokenValid = true
 
   constructor(account: WeChatAccount) {
     this.account = account
     this.syncBuf = account.syncBuf || ''
-    // 恢复持久化的 context tokens
     this.contextTokens = loadContextTokens()
   }
 
@@ -110,9 +137,13 @@ export class WeChatAdapter implements TransportAdapter {
           const text = firstItem?.text_item?.text || firstItem?.voice_item?.voice_text || ''
           if (!text.trim()) continue
 
-          // 缓存 context_token 并持久化
+          // 缓存 context_token（新消息 = 全新 token，重置计数和时间）
           if (rawMsg.context_token) {
-            this.contextTokens.set(rawMsg.from_user_id, rawMsg.context_token)
+            this.contextTokens.set(rawMsg.from_user_id, {
+              token: rawMsg.context_token,
+              receivedAt: Date.now(),
+              useCount: 0,
+            })
             saveContextTokens(this.contextTokens)
           }
 
@@ -166,7 +197,14 @@ export class WeChatAdapter implements TransportAdapter {
 
     // conversationId 格式: wechat:<userId>
     const userId = conversationId.replace('wechat:', '')
-    const contextToken = this.contextTokens.get(userId)
+    const entry = this.contextTokens.get(userId)
+
+    if (!isTokenValid(entry)) {
+      log(`[wechat] context_token 不可用 (${!entry ? '无token' : entry.useCount >= MAX_TOKEN_USES ? '已用' + entry.useCount + '次' : '已过期'})`)
+      throw new Error('微信 context_token 不可用。请在微信中给 ClawBot 发一条消息后重试。')
+    }
+
+    const contextToken = entry!.token
 
     const clientId = `im2cc:${Date.now()}-${Math.random().toString(16).slice(2, 10)}`
     const body = {
@@ -176,7 +214,7 @@ export class WeChatAdapter implements TransportAdapter {
         client_id: clientId,
         message_type: 2,
         message_state: 2,
-        ...(contextToken ? { context_token: contextToken } : {}),
+        context_token: contextToken,
         item_list: [
           {
             type: 1,
@@ -201,6 +239,12 @@ export class WeChatAdapter implements TransportAdapter {
         this.tokenValid = false
       }
       throw new Error(`iLink sendmessage 失败: ${resp.status} ${respText.slice(0, 200)}`)
+    }
+
+    // 发送成功，增加使用计数
+    if (entry) {
+      entry.useCount++
+      saveContextTokens(this.contextTokens)
     }
   }
 
