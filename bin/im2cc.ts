@@ -326,7 +326,18 @@ async function cmdNew(): Promise<void> {
 
   try {
     const driver = getDriver(tool)
-    const { sessionId } = await driver.createSession(validation.resolvedPath, config.defaultPermissionMode ?? 'default', name)
+    let sessionId: string
+
+    if (tool === 'claude') {
+      // Claude 需要预创建 session 文件（headless），之后 --resume 才能找到
+      const result = await driver.createSession(validation.resolvedPath, config.defaultPermissionMode ?? 'default', name)
+      sessionId = result.sessionId
+    } else {
+      // 其他工具：直接生成 UUID 注册，交互启动时工具自己管理 session
+      const crypto = await import('node:crypto')
+      sessionId = crypto.randomUUID()
+    }
+
     register(name, sessionId, validation.resolvedPath, tool)
 
     // 在 tmux 中启动交互式工具
@@ -341,10 +352,13 @@ async function cmdNew(): Promise<void> {
     }
 
     try {
-      const resumeArgs = toolResumeArgs(tool, sessionId, name)
+      // Claude 用 resume（session 已在 headless 中创建），其他工具用 create（首次交互启动）
+      const tmuxArgs = tool === 'claude'
+        ? toolResumeArgs(tool, sessionId, name)
+        : toolCreateArgs(tool, sessionId, name)
       execFileSync('tmux', [
         'new-session', '-d', '-s', tmuxSession, '-c', validation.resolvedPath,
-        ...resumeArgs,
+        ...tmuxArgs,
       ])
 
       console.log(`✅ 创建对话 "${name}"${toolLabel} → ${path.basename(validation.resolvedPath)}`)
@@ -355,8 +369,10 @@ async function cmdNew(): Promise<void> {
       // tmux 不可用，直接启动
       console.log(`✅ 已创建 "${name}"`)
       console.log(`   打开: im2cc connect ${name}`)
-      const resumeArgs = toolResumeArgs(tool, sessionId, name)
-      execFileSync(resumeArgs[0], resumeArgs.slice(1), { stdio: 'inherit', cwd: validation.resolvedPath })
+      const tmuxArgs = tool === 'claude'
+        ? toolResumeArgs(tool, sessionId, name)
+        : toolCreateArgs(tool, sessionId, name)
+      execFileSync(tmuxArgs[0], tmuxArgs.slice(1), { stdio: 'inherit', cwd: validation.resolvedPath })
     }
   } catch (err) {
     console.error(`❌ 创建失败: ${err instanceof Error ? err.message : String(err)}`)
