@@ -29,23 +29,23 @@ npm link          # 如果权限不够，用 sudo npm link
 
 ### 3. 配置终端命令
 
-检测用户的 shell（zsh 还是 bash），将 source 行添加到对应的 rc 文件中。
+在用户的 shell 配置文件（~/.zshrc 或 ~/.bashrc）中添加以下内容：
 
-对于 zsh（`~/.zshrc`）：
 ```bash
-echo '' >> ~/.zshrc
-echo '# im2cc — 终端命令 (fn/fc/fl/fk/fd/fs)' >> ~/.zshrc
-echo "source \"$(pwd)/shell/im2cc-shell-functions.zsh\"" >> ~/.zshrc
+# im2cc 命令
+fn()       { im2cc new "$@"; }
+fc()       { im2cc connect "$@"; }
+fl()       { im2cc list; }
+fk()       { im2cc delete "$@"; }
+fd()       { im2cc detach; }
+fs()       { im2cc show "$@"; }
+fn-codex() { im2cc new --tool codex "$@"; }
+fn-kimi()  { im2cc new --tool kimi "$@"; }
+fn-gemini(){ im2cc new --tool gemini "$@"; }
+fn-cline() { im2cc new --tool cline "$@"; }
 ```
 
-对于 bash（`~/.bashrc`）：
-```bash
-echo '' >> ~/.bashrc
-echo '# im2cc — 终端命令 (fn/fc/fl/fk/fd/fs)' >> ~/.bashrc
-echo "source \"$(pwd)/shell/im2cc-shell-functions.zsh\"" >> ~/.bashrc
-```
-
-**注意**：添加前先检查是否已经存在 `im2cc-shell-functions` 的 source 行，避免重复。
+**注意**：添加前先检查是否已经存在 `im2cc new` 的行，避免重复。如果存在旧格式（`source` 外部文件），先删除旧行再添加新格式。
 
 ### 4. 安装 Session 同步 Hook
 

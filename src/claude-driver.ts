@@ -88,12 +88,9 @@ export class ClaudeDriver extends BaseToolDriver {
   }
 }
 
-// 自动注册
-registerDriver(new ClaudeDriver())
-
-// --- 兼容导出（供现有 import 使用）---
-
+// 自动注册（单实例，兼容导出复用同一个）
 const _driver = new ClaudeDriver()
+registerDriver(_driver)
 
 export function getClaudeVersion(): string { return _driver.getVersion() }
 export async function createSession(cwd: string, permissionMode: string, name?: string): Promise<CreateSessionResult> {

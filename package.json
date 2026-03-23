@@ -16,13 +16,13 @@
   "engines": {
     "node": ">=20"
   },
+  "files": ["dist", "shell", "install.sh", "INSTALL.md", "LICENSE", "README.md"],
   "license": "GPL-3.0-only",
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.59.0",
     "qrcode-terminal": "^0.12.0"
   },
   "optionalDependencies": {
-    "axios": "^1.13.6",
     "dingtalk-stream": "^2.1.6-beta.1"
   },
   "devDependencies": {

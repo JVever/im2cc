@@ -95,12 +95,10 @@ export class DingTalkAdapter implements TransportAdapter {
       throw new Error('钉钉 sessionWebhook 已过期，请用户重新发送消息')
     }
 
-    // 动态导入 axios（钉钉 sessionWebhook 用 POST）
-    const { default: axios } = await import('axios')
-
-    await axios.post(cached.url, {
-      msgtype: 'text',
-      text: { content: text },
+    await fetch(cached.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ msgtype: 'text', text: { content: text } }),
     })
   }
 }

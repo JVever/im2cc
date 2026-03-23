@@ -427,7 +427,7 @@ function handleHelp(): string {
     '/mode <模式>             — 切换模式 (YOLO|default|auto-edit)',
     '/stop                    — 中断当前执行',
     '',
-    '直接发消息即转给 Claude Code',
+    '直接发消息即转给当前接入的 AI 工具',
     '',
     '发送图片或文件，再发指令即可让 Claude 分析',
   ].join('\n')
