@@ -721,6 +721,12 @@ function cmdInstallService(): void {
   // 直接运行 daemon 入口（避免 CLI start 的 double-fork）
   const mainModule = path.resolve(import.meta.dirname, '../src/index.js')
 
+  // 优先使用 Homebrew symlink 路径，避免 Cellar 版本号硬编码（升级后失效）
+  const stableNodePaths = ['/opt/homebrew/bin/node', '/usr/local/bin/node']
+  const nodePath = stableNodePaths.find(p => {
+    try { return fs.realpathSync(p) === fs.realpathSync(process.execPath) } catch { return false }
+  }) ?? process.execPath
+
   const logDir = getLogDir()
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -730,7 +736,7 @@ function cmdInstallService(): void {
   <string>com.im2cc.daemon</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${process.execPath}</string>
+    <string>${nodePath}</string>
     <string>${mainModule}</string>
   </array>
   <key>RunAtLoad</key>
