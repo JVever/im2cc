@@ -8,7 +8,7 @@
     "im2cc": "dist/bin/im2cc.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node -e \"try{const p=require('fs').readFileSync(require('os').homedir()+'/.im2cc/daemon.pid','utf-8').trim();process.kill(Number(p),0);console.log('\\x1b[33m⚠️  daemon (PID '+p+') 正在运行旧代码，请运行 im2cc stop \\x26\\x26 im2cc start 重启\\x1b[0m')}catch{}\"",
     "dev": "tsc --watch",
     "start": "node dist/src/index.js",
     "lint": "tsc --noEmit",
