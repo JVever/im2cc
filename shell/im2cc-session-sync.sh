@@ -46,6 +46,13 @@ current_sid = reg[name].get('sessionId', '')
 if current_sid == new_sid:
     sys.exit(0)
 
+# 守卫 0: 工具检查 — 本 hook 是 Claude Code 专属，不应覆写其他工具的 session
+tool = reg[name].get('tool', 'claude')
+if tool != 'claude':
+    print(f'[im2cc] INFO: \"{name}\" is a {tool} session, skipping Claude session sync',
+          file=sys.stderr)
+    sys.exit(0)
+
 # 守卫 1: 唯一性 — 新 session ID 不能已被其他 name 持有
 for other_name, other_data in reg.items():
     if other_name != name and other_data.get('sessionId') == new_sid:

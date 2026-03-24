@@ -26,6 +26,8 @@ export interface TransportAdapter {
   start(onMessage: (msg: IncomingMessage) => Promise<void>): void
   sendText(conversationId: string, text: string): Promise<void>
   downloadMedia?(messageId: string, fileKey: string, msgType: string, destPath: string): Promise<void>
+  /** 给消息添加表情回应（确认收到），可选 */
+  addReaction?(messageId: string, emojiType?: string): Promise<void>
 }
 
 /** 各 transport 的消息长度限制 */

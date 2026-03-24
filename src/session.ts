@@ -1,13 +1,13 @@
 /**
  * @input:    ~/.im2cc/data/bindings.json, Binding 数据结构
- * @output:   createBinding(), getBinding(), updateBinding(), archiveBinding(), listActiveBindings(), isDuplicate()
+ * @output:   createBinding(), getBinding(), updateBinding(), archiveBinding(), listActiveBindings(), isDuplicate() — 会话绑定与跨进程消息去重
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { getDataDir } from './config.js'
+import { getDataDir, getMessageDedupDir } from './config.js'
 import type { TransportType } from './transport.js'
 import type { ToolId } from './tool-driver.js'
 
@@ -137,60 +137,127 @@ export function listActiveBindings(): Binding[] {
   return readBindings().filter(b => !b.archived)
 }
 
-// --- 消息去重 ---
-const seenMessages = new Map<string, number>()
-const MAX_SEEN = 1000
-let seenLoaded = false
+// --- 消息去重（跨进程） ---
 
-function seenMessagesFile(): string {
-  return path.join(getDataDir(), 'recent-message-ids.json')
+const DUPLICATE_TTL_MS = 24 * 60 * 60 * 1000
+const DUPLICATE_SWEEP_INTERVAL = 100
+const recentDuplicateKeys = new Map<string, number>()
+let duplicateCheckCount = 0
+
+function dedupFileForKey(messageKey: string): string {
+  const hashed = crypto.createHash('sha1').update(messageKey).digest('hex')
+  return path.join(getMessageDedupDir(), `${hashed}.json`)
 }
 
-function loadSeenMessages(): void {
-  if (seenLoaded) return
-  seenLoaded = true
+function touchRecentDuplicateKey(messageKey: string, timestamp: number): void {
+  recentDuplicateKeys.set(messageKey, timestamp)
 
-  const file = seenMessagesFile()
-  if (!fs.existsSync(file)) return
+  if (recentDuplicateKeys.size <= 2048) return
+
+  const cutoff = Date.now() - DUPLICATE_TTL_MS
+  for (const [key, seenAt] of recentDuplicateKeys) {
+    if (seenAt < cutoff) recentDuplicateKeys.delete(key)
+  }
+}
+
+function isFreshTimestamp(timestamp: unknown): timestamp is number {
+  return typeof timestamp === 'number' && Number.isFinite(timestamp) && (Date.now() - timestamp) < DUPLICATE_TTL_MS
+}
+
+function readDedupTimestamp(filePath: string): number | null {
+  try {
+    const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as Record<string, unknown>
+    return isFreshTimestamp(raw.timestamp) ? raw.timestamp : null
+  } catch {
+    return null
+  }
+}
+
+function unlinkDedupFile(filePath: string): void {
+  try {
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
+  } catch {}
+}
+
+function tryCreateDedupMarker(filePath: string, messageKey: string, timestamp: number): 'created' | 'duplicate' | 'retry' {
+  let fd: number | null = null
 
   try {
-    const raw = JSON.parse(fs.readFileSync(file, 'utf-8')) as Array<[string, number]>
-    for (const [id, timestamp] of raw) {
-      if (typeof id === 'string' && typeof timestamp === 'number') {
-        seenMessages.set(id, timestamp)
+    fd = fs.openSync(filePath, 'wx')
+    fs.writeFileSync(fd, JSON.stringify({ key: messageKey, timestamp }))
+    touchRecentDuplicateKey(messageKey, timestamp)
+    return 'created'
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+
+    const existingTs = readDedupTimestamp(filePath)
+    if (existingTs !== null) {
+      touchRecentDuplicateKey(messageKey, existingTs)
+      return 'duplicate'
+    }
+
+    unlinkDedupFile(filePath)
+    return 'retry'
+  } finally {
+    if (fd !== null) {
+      try { fs.closeSync(fd) } catch {}
+    }
+  }
+}
+
+function cleanupDedupFiles(): void {
+  const dir = getMessageDedupDir()
+  const cutoff = Date.now() - DUPLICATE_TTL_MS
+
+  try {
+    for (const entry of fs.readdirSync(dir)) {
+      const filePath = path.join(dir, entry)
+      try {
+        const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as Record<string, unknown>
+        if (!isFreshTimestamp(raw.timestamp) || (raw.timestamp as number) < cutoff) {
+          fs.unlinkSync(filePath)
+        }
+      } catch {
+        try { fs.unlinkSync(filePath) } catch {}
       }
     }
   } catch {
-    // ignore invalid cache
+    // ignore best-effort cleanup failures
   }
 }
 
-function persistSeenMessages(): void {
-  const file = seenMessagesFile()
-  const tmp = file + '.tmp.' + process.pid
-  const entries = [...seenMessages.entries()].sort((a, b) => a[1] - b[1]).slice(-MAX_SEEN)
-  try {
-    fs.writeFileSync(tmp, JSON.stringify(entries))
-    fs.renameSync(tmp, file)
-  } catch {
-    try { fs.unlinkSync(tmp) } catch {}
-  }
-}
+export function isDuplicate(messageKey: string): boolean {
+  const now = Date.now()
+  const recentTs = recentDuplicateKeys.get(messageKey)
+  if (recentTs && (now - recentTs) < DUPLICATE_TTL_MS) return true
 
-export function isDuplicate(messageId: string): boolean {
-  loadSeenMessages()
-
-  if (seenMessages.has(messageId)) return true
-  seenMessages.set(messageId, Date.now())
-
-  // LRU 清理
-  if (seenMessages.size > MAX_SEEN) {
-    const oldest = [...seenMessages.entries()]
-      .sort((a, b) => a[1] - b[1])
-      .slice(0, MAX_SEEN / 2)
-    for (const [key] of oldest) seenMessages.delete(key)
+  const filePath = dedupFileForKey(messageKey)
+  const existingTs = fs.existsSync(filePath) ? readDedupTimestamp(filePath) : null
+  if (existingTs !== null) {
+    touchRecentDuplicateKey(messageKey, existingTs)
+    return true
   }
 
-  persistSeenMessages()
+  unlinkDedupFile(filePath)
+
+  let created = false
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = tryCreateDedupMarker(filePath, messageKey, now)
+    if (result === 'created') {
+      created = true
+      break
+    }
+    if (result === 'duplicate') {
+      return true
+    }
+  }
+
+  if (!created) throw new Error(`无法创建消息去重标记: ${messageKey}`)
+
+  duplicateCheckCount++
+  if (duplicateCheckCount % DUPLICATE_SWEEP_INTERVAL === 0) {
+    cleanupDedupFiles()
+  }
+
   return false
 }

@@ -30,6 +30,7 @@ import {
   inspectProcess,
   isDaemonEntrypointInvocation,
   isIm2ccDaemonProcess,
+  killAllDaemonProcesses,
   listDaemonProcessPids,
   prepareDaemonProcessIdentity,
   readDaemonPidRecord,
@@ -37,28 +38,49 @@ import {
 
 const DAEMON_ENTRY = daemonMainModulePath()
 
-/** 检查某个 session 是否正在被本地 tmux 使用（兼容新旧 tmux 命名格式） */
+/**
+ * 检查某个 session 是否正在被本地 tmux 使用。
+ * Registry 是工具身份的唯一权威来源：旧格式 tmux session 需验证实际进程。
+ */
 function isSessionLocallyActive(sessionName: string, tool: string = 'claude'): boolean {
-  const names = [`im2cc-${tool}-${sessionName}`, `im2cc-${sessionName}`]
-  for (const n of names) {
-    try {
-      execFileSync('tmux', ['has-session', '-t', n], { stdio: 'ignore' })
-      return true
-    } catch {}
+  // 新格式：名称已编码工具身份，直接判断
+  const newName = `im2cc-${tool}-${sessionName}`
+  try {
+    execFileSync('tmux', ['has-session', '-t', newName], { stdio: 'ignore' })
+    return true
+  } catch {}
+
+  // 旧格式：存在时需验证进程是否匹配预期工具
+  const oldName = `im2cc-${sessionName}`
+  try {
+    execFileSync('tmux', ['has-session', '-t', oldName], { stdio: 'ignore' })
+  } catch {
+    return false
   }
-  return false
+
+  // 旧格式存在 → 检测实际运行的工具
+  try {
+    const pid = execFileSync('tmux', ['list-panes', '-t', oldName, '-F', '#{pane_pid}'],
+      { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] }).trim().split('\n')[0]
+    if (!pid) return false
+    const cmd = execFileSync('ps', ['-p', pid, '-o', 'command='],
+      { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] }).trim()
+    return cmd === tool || cmd.startsWith(`${tool} `) || cmd.endsWith(`/${tool}`)
+  } catch {
+    return false
+  }
 }
 
-/** 单实例保护：确保只有一个守护进程在运行 */
+/** 单实例保护：杀死所有旧守护进程，确保只有一个在运行 */
 function acquireLock(): boolean {
   const pidFile = getPidFile()
   const lockDir = getDaemonLockDir()
   const lockMetaFile = path.join(lockDir, 'owner.json')
 
-  const existingDaemonPids = listDaemonProcessPids(DAEMON_ENTRY)
-  if (existingDaemonPids.length > 0) {
-    error(`检测到已运行的 im2cc 守护进程 (PID: ${existingDaemonPids.join(', ')})，本次启动终止`)
-    return false
+  // 主动杀死所有检测到的旧守护进程（防止僵尸进程累积导致消息重复处理）
+  const killedPids = killAllDaemonProcesses(DAEMON_ENTRY)
+  if (killedPids.length > 0) {
+    log(`已清理 ${killedPids.length} 个旧守护进程 (PID: ${killedPids.join(', ')})`)
   }
 
   const writePidFile = () => {
@@ -443,6 +465,33 @@ export async function startDaemon(): Promise<void> {
     const cwds = listActiveBindings().map(b => b.cwd)
     runInboxCleanup(cwds, config.inboxTtlMinutes)
   }, 10 * 60 * 1000)
+
+  // 运行时单实例自检（纵深防御第 2 层）
+  // 每 30 秒验证：PID 文件仍是自己 + 没有其他守护进程。
+  // 如果不满足，说明另一个 daemon 已接管，当前进程应自杀。
+  const SELF_CHECK_INTERVAL_MS = 30_000
+  setInterval(() => {
+    // 检查 PID 文件
+    try {
+      const pidFile = getPidFile()
+      const recorded = parseInt(fs.readFileSync(pidFile, 'utf-8').trim(), 10)
+      if (recorded !== process.pid) {
+        error(`[自检] PID 文件已被覆盖 (文件=${recorded}, 自身=${process.pid})，本进程退出以防重复处理`)
+        process.exit(0)
+      }
+    } catch {
+      // PID 文件不存在或读取失败 — 可能是 stop 命令删了文件，正常退出
+      error(`[自检] PID 文件不可读，本进程退出`)
+      process.exit(0)
+    }
+
+    // 检查是否有其他守护进程
+    const others = listDaemonProcessPids(DAEMON_ENTRY)
+    if (others.length > 0) {
+      error(`[自检] 检测到其他守护进程 (PID: ${others.join(', ')})，本进程退出以防重复处理`)
+      process.exit(0)
+    }
+  }, SELF_CHECK_INTERVAL_MS)
 
   log(`im2cc 已启动，${adapters.size} 个 transport，${activeBindings.length} 个活跃绑定`)
 }

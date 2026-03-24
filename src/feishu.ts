@@ -94,6 +94,18 @@ export class FeishuAdapter implements TransportAdapter {
     setTimeout(pollLoop, pollIntervalMs)
   }
 
+  /** 给消息添加表情回应（确认收到） */
+  async addReaction(messageId: string, emojiType: string = 'OnIt'): Promise<void> {
+    try {
+      await this.client.im.messageReaction.create({
+        path: { message_id: messageId },
+        data: { reaction_type: { emoji_type: emojiType } },
+      })
+    } catch {
+      // 非关键功能，失败不影响主流程
+    }
+  }
+
   async sendText(conversationId: string, text: string): Promise<void> {
     try {
       await this.client.im.message.create({

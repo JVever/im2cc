@@ -26,6 +26,11 @@ export interface RunToolOptions {
   extractResult?: (event: Record<string, unknown>) => string
 }
 
+interface ToolFailureInfo {
+  userMessage: string
+  rawMessage: string
+}
+
 /**
  * 所有工具 driver 的通用基类。
  * 提供 killLocalSession、interrupt、runTool 的通用实现。
@@ -128,6 +133,7 @@ export abstract class BaseToolDriver implements ToolDriver {
       let stderr = ''
       const turnTexts: string[] = []
       const resultParts: string[] = []
+      let detectedFailure: ToolFailureInfo | null = null
 
       // 默认文本提取：尝试常见的 NDJSON 格式
       const extractText = opts.extractText ?? defaultExtractText
@@ -135,12 +141,18 @@ export abstract class BaseToolDriver implements ToolDriver {
 
       function handleEvent(event: Record<string, unknown>): void {
         opts.onEvent?.(event)
-        const text = extractText(event)
+        const text = extractText(event).trim()
+        const result = extractResult(event).trim()
+        const failure = detectToolFailure(opts.cmd, event, [text, result].filter(Boolean))
+        if (failure) {
+          detectedFailure = failure
+          return
+        }
+
         if (text) {
           turnTexts.push(text)
           opts.onTurnText?.(text)
         }
-        const result = extractResult(event)
         if (result) resultParts.push(result)
 
         // 输出落盘
@@ -177,11 +189,17 @@ export abstract class BaseToolDriver implements ToolDriver {
         const resultText = turnTexts.length > 0
           ? turnTexts.join('\n\n---\n\n')
           : resultParts.join('\n\n---\n\n')
+        const stderrText = stderr.trim()
+        const trailingFailure = detectedFailure
+          ?? detectToolFailure(opts.cmd, null, [stderrText, resultText].filter(Boolean))
 
-        if (code === 0 || resultText) {
+        if (trailingFailure) {
+          reject(new Error(trailingFailure.userMessage))
+        } else if (code === 0) {
           resolve(resultText || '(无输出)')
         } else {
-          reject(new Error(`${opts.cmd} 退出码 ${code}: ${stderr.slice(0, 500)}`))
+          const detail = (stderrText || resultText).slice(0, 500)
+          reject(new Error(detail ? `${opts.cmd} 退出码 ${code}: ${detail}` : `${opts.cmd} 退出码 ${code}`))
         }
       })
     })
@@ -215,6 +233,61 @@ function defaultExtractText(event: Record<string, unknown>): string {
 function defaultExtractResult(event: Record<string, unknown>): string {
   if (event.type === 'result' && typeof event.result === 'string') return event.result
   return ''
+}
+
+function detectToolFailure(
+  cmd: string,
+  event: Record<string, unknown> | null,
+  messages: string[],
+): ToolFailureInfo | null {
+  const rawMessage = messages.map(m => m.trim()).find(Boolean) ?? ''
+  const eventError = typeof event?.error === 'string' ? event.error : ''
+  const isApiError = event?.isApiErrorMessage === true || !!eventError
+
+  if (isApiError && rawMessage) {
+    return buildToolFailure(cmd, rawMessage, eventError)
+  }
+
+  if (rawMessage && looksLikeSyntheticToolError(rawMessage)) {
+    return buildToolFailure(cmd, rawMessage, eventError)
+  }
+
+  return null
+}
+
+function looksLikeSyntheticToolError(message: string): boolean {
+  return [
+    /^you['’]ve hit your limit\b/i,
+    /^api error:\s*rate limit reached\b/i,
+    /\ballocationquota\./i,
+    /\bfree tier\b.*\bexhausted\b/i,
+  ].some(pattern => pattern.test(message))
+}
+
+function buildToolFailure(cmd: string, rawMessage: string, eventError: string): ToolFailureInfo {
+  const toolName = cmd.toLowerCase() === 'claude' ? 'Claude Code' : cmd
+  const normalized = rawMessage.replace(/\s+/g, ' ').trim()
+  const resetMatch = normalized.match(/resets?\s+(.+)$/i)
+
+  if (eventError === 'rate_limit' || /^you['’]ve hit your limit\b/i.test(normalized) || /\brate limit\b/i.test(normalized)) {
+    const resetText = resetMatch ? `，${resetMatch[0]}` : ''
+    return {
+      userMessage: `${toolName} 已触发额度限制${resetText}。请稍后重试，或先切换到其他工具。`,
+      rawMessage,
+    }
+  }
+
+  if (/\ballocationquota\./i.test(normalized) || /\bfree tier\b.*\bexhausted\b/i.test(normalized)) {
+    return {
+      userMessage: `${toolName} 当前额度已耗尽。请补充额度或切换到其他工具后重试。`,
+      rawMessage,
+    }
+  }
+
+  return {
+    userMessage: `${toolName} 执行失败: ${normalized}`,
+    rawMessage,
+  }
 }
 
 // --- recap 通用工具（供各 driver 的 buildRecap 使用）---

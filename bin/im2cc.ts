@@ -9,13 +9,14 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { execSync, execFileSync, fork } from 'node:child_process'
-import { loadConfig, saveConfig, configExists, getPidFile, getLogDir, getConfigDir, loadWeChatAccount, saveWeChatAccount, getWeChatAccountFile, type Im2ccConfig } from '../src/config.js'
+import { loadConfig, saveConfig, configExists, getPidFile, getDaemonLockDir, getLogDir, getConfigDir, loadWeChatAccount, saveWeChatAccount, getWeChatAccountFile, type Im2ccConfig } from '../src/config.js'
 import { listActiveBindings, archiveBinding } from '../src/session.js'
 import { getClaudeVersion } from '../src/claude-driver.js'
 import { register, lookup, listRegistered, remove } from '../src/registry.js'
 import { expandPath, validatePath, isValidSessionName } from '../src/security.js'
 import { getDriver, hasDriver, type ToolId } from '../src/tool-driver.js'
 import { findSession } from '../src/discover.js'
+import { DAEMON_LOCK_STARTUP_GRACE_MS, daemonMainModulePath, isIm2ccDaemonProcess, killAllDaemonProcesses, listDaemonProcessPids, readDaemonPidRecord } from '../src/daemon-process.js'
 import readline from 'node:readline'
 
 // 触发各 driver 自注册（模块级副作用）
@@ -33,6 +34,48 @@ function resumeCommand(tool: ToolId, sessionId: string): string {
     case 'kimi': return `kimi --session ${sessionId}`
     case 'gemini': return `gemini --resume ${sessionId}`
   }
+}
+
+type DaemonState =
+  | { kind: 'running', pids: number[] }
+  | { kind: 'starting' }
+  | { kind: 'stale', pid: number | null }
+  | { kind: 'stopped' }
+
+function inspectDaemonState(): DaemonState {
+  const livePids = listDaemonProcessPids(daemonMainModulePath())
+  if (livePids.length > 0) {
+    return { kind: 'running', pids: livePids }
+  }
+
+  const daemonPidRecord = readDaemonPidRecord()
+  if (daemonPidRecord.pid !== null) {
+    return isIm2ccDaemonProcess(daemonPidRecord.pid, daemonMainModulePath())
+      ? { kind: 'running', pids: [daemonPidRecord.pid] }
+      : { kind: 'stale', pid: daemonPidRecord.pid }
+  }
+
+  if (daemonPidRecord.present) {
+    return { kind: 'stale', pid: null }
+  }
+
+  const lockDir = getDaemonLockDir()
+  if (fs.existsSync(lockDir)) {
+    try {
+      const stat = fs.statSync(lockDir)
+      if ((Date.now() - stat.mtimeMs) < DAEMON_LOCK_STARTUP_GRACE_MS) {
+        return { kind: 'starting' }
+      }
+    } catch {}
+    return { kind: 'stale', pid: null }
+  }
+
+  return { kind: 'stopped' }
+}
+
+function cleanupStaleDaemonState(): void {
+  try { fs.unlinkSync(getPidFile()) } catch {}
+  try { fs.rmSync(getDaemonLockDir(), { recursive: true, force: true }) } catch {}
 }
 
 switch (command) {
@@ -94,6 +137,21 @@ function tmuxSessionExists(name: string): boolean {
   } catch { return false }
 }
 
+/** 检测 tmux session 中实际运行的工具（通过进程名匹配） */
+function tmuxPaneTool(tmuxSession: string): ToolId | null {
+  try {
+    const pid = execFileSync('tmux', ['list-panes', '-t', tmuxSession, '-F', '#{pane_pid}'],
+      { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] }).trim().split('\n')[0]
+    if (!pid) return null
+    const cmd = execFileSync('ps', ['-p', pid, '-o', 'command='],
+      { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] }).trim()
+    for (const t of ['claude', 'codex', 'kimi', 'gemini'] as const) {
+      if (cmd === t || cmd.startsWith(`${t} `) || cmd.endsWith(`/${t}`)) return t
+    }
+    return null
+  } catch { return null }
+}
+
 /** 连接到 tmux session（在 tmux 内用 switch-client，否则用 attach） */
 function tmuxConnect(tmuxSession: string): void {
   try {
@@ -107,12 +165,32 @@ function tmuxConnect(tmuxSession: string): void {
   }
 }
 
-/** 查找 tmux session（兼容新旧命名格式） */
+/**
+ * 查找属于指定 name + tool 的 tmux session。
+ * Registry 是工具身份的唯一权威来源，tmux 命名只是进程管理标签。
+ * 旧格式 session 需验证实际运行的工具是否匹配，不匹配则不接入。
+ */
 function findTmuxSession(name: string, tool: string = 'claude'): string | null {
+  // 新格式：名称已编码工具身份，直接匹配
   const newName = `im2cc-${tool}-${name}`
   if (tmuxSessionExists(newName)) return newName
+
+  // 旧格式：名称不含工具信息，需验证进程
   const oldName = `im2cc-${name}`
-  if (tmuxSessionExists(oldName)) return oldName
+  if (!tmuxSessionExists(oldName)) return null
+
+  const actualTool = tmuxPaneTool(oldName)
+  if (actualTool === tool) {
+    // 工具匹配 → 升级命名，无损迁移
+    try {
+      execFileSync('tmux', ['rename-session', '-t', oldName, newName], { stdio: 'ignore' })
+      return newName
+    } catch {
+      return oldName
+    }
+  }
+
+  // 工具不匹配或无法检测 → 不接入，让调用方重新创建正确的 session
   return null
 }
 
@@ -185,15 +263,23 @@ async function cmdStart(): Promise<void> {
     process.exit(1)
   }
 
-  const pidFile = getPidFile()
-  if (fs.existsSync(pidFile)) {
-    const pid = parseInt(fs.readFileSync(pidFile, 'utf-8').trim())
-    try { process.kill(pid, 0); console.log(`守护进程已在运行 (PID: ${pid})`); return } catch { /* 旧 PID，继续 */ }
+  const state = inspectDaemonState()
+  if (state.kind === 'running') {
+    const suffix = state.pids.length > 1 ? '，检测到重复实例' : ''
+    console.log(`守护进程已在运行 (PID: ${state.pids.join(', ')})${suffix}`)
+    return
+  }
+  if (state.kind === 'starting') {
+    console.log('守护进程正在启动中，请稍后再试')
+    return
+  }
+  if (state.kind === 'stale') {
+    cleanupStaleDaemonState()
   }
 
   console.log('启动 im2cc 守护进程...')
 
-  const mainModule = path.resolve(import.meta.dirname, '../src/index.js')
+  const mainModule = daemonMainModulePath()
   const child = fork(mainModule, [], {
     detached: true,
     stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
@@ -201,56 +287,70 @@ async function cmdStart(): Promise<void> {
 
   child.unref()
 
-  if (child.pid) {
-    // PID 文件由 startDaemon() 内部的 acquireLock() 管理
-    console.log(`✅ 守护进程已启动 (PID: ${child.pid})`)
-    console.log(`   日志: im2cc logs`)
+  let runningPids: number[] = []
+  for (let i = 0; i < 20; i++) {
+    const current = inspectDaemonState()
+    if (current.kind === 'running') {
+      runningPids = current.pids
+      break
+    }
+    if (current.kind === 'stale') {
+      break
+    }
+    await new Promise(resolve => setTimeout(resolve, 100))
   }
 
   child.disconnect()
+
+  if (runningPids.length > 0) {
+    const suffix = runningPids.length > 1 ? '，但检测到重复实例，请先执行 im2cc stop 清理旧进程' : ''
+    console.log(`✅ 守护进程已启动 (PID: ${runningPids.join(', ')})${suffix}`)
+    console.log(`   日志: im2cc logs`)
+    return
+  }
+
+  console.log('⚠️ 启动命令已发出，但尚未确认守护进程就绪')
+  console.log('   请运行: im2cc status')
 }
 
 function cmdStop(): void {
-  const pidFile = getPidFile()
-  if (!fs.existsSync(pidFile)) {
+  // 使用 killAllDaemonProcesses 确保杀死所有守护进程（包括 pgrep 发现的僵尸进程）
+  const killedPids = killAllDaemonProcesses(daemonMainModulePath(), process.pid)
+
+  if (killedPids.length > 0) {
+    // 提示活跃绑定状态
+    const bindings = listActiveBindings()
+    if (bindings.length > 0) {
+      console.log(`⚠️ 当前有 ${bindings.length} 个活跃绑定，执行中的任务结果将在下次启动时恢复`)
+    }
+    console.log(`✅ 已停止守护进程 (PID: ${killedPids.join(', ')})`)
+  } else {
     console.log('守护进程未运行')
-    return
   }
 
-  // 提示活跃绑定状态
-  const bindings = listActiveBindings()
-  if (bindings.length > 0) {
-    console.log(`⚠️ 当前有 ${bindings.length} 个活跃绑定，执行中的任务结果将在下次启动时恢复`)
-  }
-
-  const pid = parseInt(fs.readFileSync(pidFile, 'utf-8').trim())
-  try {
-    process.kill(pid, 'SIGTERM')
-    // PID 文件由 startDaemon() 的 cleanup handler 负责删除
-    console.log(`✅ 守护进程已停止 (PID: ${pid})`)
-  } catch {
-    try { fs.unlinkSync(pidFile) } catch {}
-    console.log('守护进程已不存在，已清理 PID 文件')
-  }
+  // 清理残留状态文件
+  cleanupStaleDaemonState()
 }
 
 function cmdStatus(): void {
-  const pidFile = getPidFile()
-  if (!fs.existsSync(pidFile)) {
-    console.log('⬤ 守护进程未运行')
+  const state = inspectDaemonState()
+  if (state.kind === 'running') {
+    const bindings = listActiveBindings()
+    const duplicateNote = state.pids.length > 1 ? ' [检测到重复实例]' : ''
+    console.log(`🟢 守护进程运行中 (PID: ${state.pids.join(', ')})${duplicateNote}`)
+    console.log(`   活跃绑定: ${bindings.length}`)
     return
   }
-
-  const pid = parseInt(fs.readFileSync(pidFile, 'utf-8').trim())
-  try {
-    process.kill(pid, 0)
-    const bindings = listActiveBindings()
-    console.log(`🟢 守护进程运行中 (PID: ${pid})`)
-    console.log(`   活跃绑定: ${bindings.length}`)
-  } catch {
-    console.log('⬤ 守护进程未运行 (PID 文件残留)')
-    fs.unlinkSync(pidFile)
+  if (state.kind === 'starting') {
+    console.log('🟡 守护进程启动中')
+    return
   }
+  if (state.kind === 'stale') {
+    cleanupStaleDaemonState()
+    console.log('⬤ 守护进程未运行 (已清理残留状态)')
+    return
+  }
+  console.log('⬤ 守护进程未运行')
 }
 
 function cmdLogs(): void {
@@ -571,13 +671,13 @@ function cmdDelete(): void {
     return
   }
 
-  // Kill tmux（兼容新旧命名格式）
-  const tmux = findTmuxSession(session.name, session.tool)
-  if (tmux) {
+  // Kill tmux — 显式删除时清理所有格式的 tmux session，不依赖工具验证
+  for (const tmuxName of [`im2cc-${session.tool ?? 'claude'}-${session.name}`, `im2cc-${session.name}`]) {
     try {
-      execFileSync('tmux', ['kill-session', '-t', tmux], { stdio: 'ignore' })
+      execFileSync('tmux', ['has-session', '-t', tmuxName], { stdio: 'ignore' })
+      execFileSync('tmux', ['kill-session', '-t', tmuxName], { stdio: 'ignore' })
       console.log('✅ 已终止 tmux 会话')
-    } catch { /* 忽略 */ }
+    } catch { /* 不存在 */ }
   }
 
   remove(session.name)
@@ -736,11 +836,14 @@ function cmdDoctor(): void {
   console.log(`活跃绑定: ${bindings.length}`)
 
   // PID 检查
-  const pidFile = getPidFile()
-  if (fs.existsSync(pidFile)) {
-    const pid = parseInt(fs.readFileSync(pidFile, 'utf-8').trim())
-    try { process.kill(pid, 0); console.log(`守护进程: 🟢 运行中 (PID: ${pid})`) }
-    catch { console.log('守护进程: ⬤ 未运行 (PID 文件残留)') }
+  const daemonState = inspectDaemonState()
+  if (daemonState.kind === 'running') {
+    const duplicateNote = daemonState.pids.length > 1 ? ' [重复实例]' : ''
+    console.log(`守护进程: 🟢 运行中 (PID: ${daemonState.pids.join(', ')})${duplicateNote}`)
+  } else if (daemonState.kind === 'starting') {
+    console.log('守护进程: 🟡 启动中')
+  } else if (daemonState.kind === 'stale') {
+    console.log(`守护进程: ⬤ 未运行（检测到残留${daemonState.pid ? ` PID: ${daemonState.pid}` : ' 锁'}）`)
   } else {
     console.log('守护进程: ⬤ 未运行')
   }

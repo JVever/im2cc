@@ -1,6 +1,6 @@
 /**
  * @input:    ~/.im2cc/config.json (飞书凭证、白名单、默认参数), ~/.im2cc/wechat-account.json
- * @output:   loadConfig(), saveConfig(), getDataDir(), loadWeChatAccount(), saveWeChatAccount() — 配置读写和数据目录管理
+ * @output:   loadConfig(), saveConfig(), getDataDir(), getDaemonLockDir(), getMessageDedupDir(), loadWeChatAccount(), saveWeChatAccount() — 配置读写和数据目录管理
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -28,8 +28,10 @@ const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json')
 const DATA_DIR = path.join(CONFIG_DIR, 'data')
 const LOG_DIR = path.join(CONFIG_DIR, 'logs')
 const PID_FILE = path.join(CONFIG_DIR, 'daemon.pid')
+const DAEMON_LOCK_DIR = path.join(CONFIG_DIR, 'daemon.lock')
 const INFLIGHT_DIR = path.join(DATA_DIR, 'inflight')
 const PENDING_FILE = path.join(DATA_DIR, 'pending.json')
+const MESSAGE_DEDUP_DIR = path.join(DATA_DIR, 'message-dedup')
 
 const DEFAULT_CONFIG: Im2ccConfig = {
   feishu: { appId: '', appSecret: '' },
@@ -89,12 +91,18 @@ export function configExists(): boolean {
 export function getDataDir(): string { ensureDirs(); return DATA_DIR }
 export function getLogDir(): string { ensureDirs(); return LOG_DIR }
 export function getPidFile(): string { ensureDirs(); return PID_FILE }
+export function getDaemonLockDir(): string { ensureDirs(); return DAEMON_LOCK_DIR }
 export function getConfigDir(): string { ensureDirs(); return CONFIG_DIR }
 export function getInflightDir(): string {
   if (!fs.existsSync(INFLIGHT_DIR)) fs.mkdirSync(INFLIGHT_DIR, { recursive: true })
   return INFLIGHT_DIR
 }
 export function getPendingFile(): string { ensureDirs(); return PENDING_FILE }
+export function getMessageDedupDir(): string {
+  ensureDirs()
+  if (!fs.existsSync(MESSAGE_DEDUP_DIR)) fs.mkdirSync(MESSAGE_DEDUP_DIR, { recursive: true })
+  return MESSAGE_DEDUP_DIR
+}
 
 // --- Telegram 配置（存在 config.json 的 telegramBotToken 字段中） ---
 
