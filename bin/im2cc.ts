@@ -23,7 +23,6 @@ import readline from 'node:readline'
 // 触发各 driver 自注册（模块级副作用）
 import '../src/claude-driver.js'
 import '../src/codex-driver.js'
-import '../src/kimi-driver.js'
 import '../src/gemini-driver.js'
 
 const command = process.argv[2]
@@ -137,7 +136,7 @@ function tmuxPaneTool(tmuxSession: string): ToolId | null {
     if (!pid) return null
     const cmd = execFileSync('ps', ['-p', pid, '-o', 'command='],
       { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] }).trim()
-    for (const t of ['claude', 'codex', 'kimi', 'gemini'] as const) {
+    for (const t of ['claude', 'codex', 'gemini'] as const) {
       if (cmd === t || cmd.startsWith(`${t} `) || cmd.endsWith(`/${t}`)) return t
     }
     return null
@@ -354,7 +353,7 @@ async function cmdNew(): Promise<void> {
   const pathArg = args[1]
 
   if (!name) {
-    console.log('用法: im2cc new [--tool claude|codex|kimi|gemini] <对话名称> [项目路径]')
+    console.log('用法: im2cc new [--tool claude|codex|gemini] <对话名称> [项目路径]')
     console.log('例如: im2cc new auth-refactor ~/Code/im2cc')
     console.log('      im2cc new --tool codex auth-refactor ~/Code/im2cc')
     console.log('      im2cc new bugfix       (使用当前目录)')
@@ -369,7 +368,7 @@ async function cmdNew(): Promise<void> {
 
   // 检查工具是否已注册
   if (!hasDriver(tool)) {
-    console.log(`❌ 工具 "${tool}" 未注册。可用工具: claude, codex, kimi, gemini`)
+    console.log(`❌ 工具 "${tool}" 未注册。可用工具: claude, codex, gemini`)
     return
   }
 
@@ -764,7 +763,7 @@ function cmdDoctor(): void {
   // AI 编程工具
   const claudeVersion = getClaudeVersion()
   console.log(`claude: ${claudeVersion === 'unknown' ? '⬤ 未安装' : '✅ ' + claudeVersion}`)
-  for (const tool of ['codex', 'kimi', 'gemini']) {
+  for (const tool of ['codex', 'gemini']) {
     try {
       execFileSync('which', [tool], { stdio: 'ignore' })
       try {

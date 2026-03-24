@@ -7,7 +7,7 @@
 import type { ChildProcess } from 'node:child_process'
 
 /** 支持的 AI 编程工具 ID */
-export type ToolId = 'claude' | 'codex' | 'gemini' | 'kimi'
+export type ToolId = 'claude' | 'codex' | 'gemini'
 
 /** 工具能力声明 */
 export interface ToolCapabilities {

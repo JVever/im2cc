@@ -13,8 +13,6 @@ function resumeHint(sessionId: string, tool: ToolId): string {
       return `回到电脑查看完整内容: claude --resume ${sessionId}`
     case 'codex':
       return `回到电脑查看完整内容: codex resume ${sessionId}`
-    case 'kimi':
-      return `回到电脑查看完整内容: kimi --session ${sessionId}`
     case 'gemini':
       return `回到电脑查看完整内容: gemini --resume ${sessionId}`
     default:

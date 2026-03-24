@@ -52,9 +52,7 @@ function toolLabel(tool: string): string {
   switch (tool) {
     case 'claude': return 'Claude Code'
     case 'codex': return 'Codex'
-    case 'kimi': return 'Kimi Code'
     case 'gemini': return 'Gemini'
-    case 'cline': return 'Cline'
     default: return tool
   }
 }

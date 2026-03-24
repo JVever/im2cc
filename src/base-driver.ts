@@ -215,7 +215,7 @@ function waitOrTimeout(child: ChildProcess, ms: number): Promise<void> {
   })
 }
 
-/** 默认文本提取：从 assistant 事件中提取 text（Claude/Kimi 格式） */
+/** 默认文本提取：从 assistant 事件中提取 text */
 function defaultExtractText(event: Record<string, unknown>): string {
   if (event.type === 'assistant') {
     const msg = event.message as Record<string, unknown> | undefined
