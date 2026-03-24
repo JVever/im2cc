@@ -47,7 +47,7 @@ export async function handleCommand(
     case 'fk': return handleFk(cmd.args, conversationId)
     case 'fs': return handleFs(conversationId)
     case 'fd': return handleFd(conversationId)
-    case 'mode': return handleMode(cmd.args, conversationId)
+    case 'mode': return handleMode(cmd.args, conversationId, config)
     case 'stop': return handleStop(conversationId)
     case 'help': return handleHelp()
     default: return `未知命令: /${cmd.command}`
@@ -100,11 +100,12 @@ async function handleFn(args: string, conversationId: string, config: Im2ccConfi
 
   try {
     const cliVersion = driver.getVersion()
-    const { sessionId } = await driver.createSession(validation.resolvedPath, config.defaultPermissionMode, sessionName)
+    const defaultMode = getDefaultMode(tool, config)
+    const { sessionId } = await driver.createSession(validation.resolvedPath, defaultMode, sessionName)
 
     register(sessionName, sessionId, validation.resolvedPath, tool)
 
-    const binding = createBinding(conversationId, sessionId, validation.resolvedPath, config.defaultPermissionMode, cliVersion, transport, tool)
+    const binding = createBinding(conversationId, sessionId, validation.resolvedPath, defaultMode, cliVersion, transport, tool)
     const supportNote = isBestEffortTool(tool) ? '\n⚠️ Gemini 为 best-effort 支持' : ''
 
     return [
@@ -220,17 +221,16 @@ async function connectToRegistered(
   const driver = getDriver(tool)
   const cliVersion = driver.getVersion()
   touch(reg.name)
-  const mode = reg.permissionMode ?? config.defaultPermissionMode
+  const mode = reg.permissionMode
+    ? migrateLegacyMode(reg.permissionMode, tool)
+    : getDefaultMode(tool, config)
   const binding = createBinding(conversationId, reg.sessionId, reg.cwd, mode, cliVersion, transport, tool)
   log(`[${conversationId}] attach → "${reg.name}" (${reg.sessionId})${killed ? ' [已关闭本地进程]' : ''}`)
 
   const header = killed ? '已接入（已关闭电脑端）' : '已接入'
-  const modeWarning = binding.permissionMode === 'YOLO'
-    ? '\n!! YOLO 模式 — 自动执行所有操作，/mode default 切换'
-    : ''
 
   const status = await buildSessionStatus(binding)
-  return `${header}${modeWarning}\n${status}`
+  return `${header}\n${status}`
 }
 
 /** 接入通过文件系统发现的对话（自动注册） */
@@ -244,16 +244,13 @@ async function connectToDiscovered(
   const driver = getDriver('claude')  // discovered sessions 目前只支持 claude
   const cliVersion = driver.getVersion()
   archiveBindingsBySession(session.sessionId, conversationId)
-  const binding = createBinding(conversationId, session.sessionId, session.projectPath, config.defaultPermissionMode, cliVersion, transport, 'claude')
+  const defaultMode = getDefaultMode('claude', config)
+  const binding = createBinding(conversationId, session.sessionId, session.projectPath, defaultMode, cliVersion, transport, 'claude')
   register(name, session.sessionId, session.projectPath, 'claude')
   log(`[${conversationId}] attach (discovered) → "${name}" (${session.sessionId})`)
 
-  const modeWarning = binding.permissionMode === 'YOLO'
-    ? '\n!! YOLO 模式 — 自动执行所有操作，/mode default 切换'
-    : ''
-
   const status = await buildSessionStatus(binding)
-  return `已接入${modeWarning}\n${status}`
+  return `已接入\n${status}`
 }
 
 /** /fc <新名称> <session-query> — 注册未注册对话并接入 */
@@ -309,43 +306,75 @@ function handleFd(conversationId: string): string {
   ].join('\n')
 }
 
-// plan 模式不适合飞书端：-p 非交互模式下 Claude 无法提问/获取反馈，
-// 需要规划时用自然语言让 Claude "先计划后执行" 更可靠
-const MODE_MAP: Record<string, string> = {
-  'yolo': 'YOLO',
-  'default': 'default',
-  'auto-edit': 'auto-edit',
+import { getToolModes, isValidMode, migrateLegacyMode, type ModeInfo } from './mode-policy.js'
+import { setDefaultMode, getDefaultMode } from './config.js'
+
+/** 格式化模式列表（● 当前 / ○ 其他） */
+function formatModeList(modes: ModeInfo[], currentMode: string): string {
+  return modes.map(m => {
+    const marker = m.id === currentMode ? '●' : '○'
+    return `${marker} ${m.id}\n  ${m.label} — ${m.description}\n  ${m.detail}`
+  }).join('\n\n')
 }
 
-// YOLO 模式映射到 Claude CLI 的实际参数
-export const MODE_TO_CLI: Record<string, string> = {
-  'YOLO': 'dangerouslySkipPermissions',
-  'default': 'default',
-  'auto-edit': 'acceptEdits',
-}
-
-function handleMode(args: string, conversationId: string): string {
-  const normalized = MODE_MAP[args.toLowerCase()]
-  if (!args || !normalized) {
-    return '用法: /mode <模式>\n\n' +
-      '  YOLO — 自动执行所有操作（默认）\n' +
-      '  default — 需要确认才执行\n' +
-      '  auto-edit — 自动编辑，其他需确认\n\n' +
-      '💡 需要 Claude 先规划再执行？直接说"先给我计划，确认后再做"'
-  }
-
+function handleMode(args: string, conversationId: string, config: Im2ccConfig): string {
   const binding = getBinding(conversationId)
   if (!binding) return '该群未绑定，请先 /fc 或 /fn'
 
-  updateBinding(conversationId, { permissionMode: normalized })
-
-  // 同步更新 registry，下次 /fc 接入时记住此模式
   const regEntry = listRegistered().find(r => r.sessionId === binding.sessionId)
-  if (regEntry) {
-    updateRegistry(regEntry.name, { permissionMode: normalized })
+  const tool = (regEntry?.tool ?? binding.tool ?? 'claude') as ToolId
+  const modes = getToolModes(tool)
+  const toolName = tool === 'claude' ? 'Claude Code' : tool.charAt(0).toUpperCase() + tool.slice(1)
+
+  // 当前模式：迁移旧名到原生名
+  const currentMode = migrateLegacyMode(binding.permissionMode, tool)
+
+  // /mode — 无参数：展示当前模式 + 所有可用模式
+  if (!args) {
+    if (modes.length === 0) return `${toolName} 暂无可配置的模式`
+    return [
+      `当前模式: ${currentMode}`,
+      '',
+      `${toolName} 可用模式:`,
+      '',
+      formatModeList(modes, currentMode),
+      '',
+      '/mode <模式名> 切换',
+      '/mode default <模式名> 设为新建会话默认模式',
+    ].join('\n')
   }
 
-  return `⚙️ 模式已切换为 ${normalized}（下一条消息生效）`
+  const parts = args.split(/\s+/)
+
+  // /mode default <name> — 设置默认模式
+  if (parts[0] === 'default') {
+    const modeId = parts[1]
+    if (!modeId) {
+      const current = getDefaultMode(tool, config)
+      return `${toolName} 当前默认模式: ${current}\n\n用法: /mode default <模式名>`
+    }
+    if (!isValidMode(tool, modeId)) {
+      const available = modes.map(m => m.id).join(', ')
+      return `"${modeId}" 不是 ${toolName} 的有效模式\n可用: ${available}`
+    }
+    setDefaultMode(tool, modeId)
+    return `${toolName} 默认模式已设为 ${modeId}\n新建 ${toolName} 会话时将使用此模式`
+  }
+
+  // /mode <name> — 切换当前会话模式
+  const modeId = parts[0]
+  if (!isValidMode(tool, modeId)) {
+    const available = modes.map(m => m.id).join(', ')
+    return `"${modeId}" 不是 ${toolName} 的有效模式\n可用: ${available}`
+  }
+
+  updateBinding(conversationId, { permissionMode: modeId })
+  if (regEntry) {
+    updateRegistry(regEntry.name, { permissionMode: modeId })
+  }
+
+  const modeInfo = modes.find(m => m.id === modeId)
+  return `模式已切换为 ${modeId}（${modeInfo?.label}）\n下一条消息生效`
 }
 
 function handleFl(): string {

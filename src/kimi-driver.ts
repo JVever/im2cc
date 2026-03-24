@@ -132,12 +132,14 @@ function extractTextContent(d: Record<string, unknown>): string {
   return ''
 }
 
+import { migrateLegacyMode } from './mode-policy.js'
+
 function kimiPermArgs(mode: string): string[] {
-  switch (mode) {
-    case 'YOLO':
+  // Kimi 非正式支持，简单映射：旧 YOLO 或任何全自动模式 → --yolo
+  const native = migrateLegacyMode(mode, 'claude') // Kimi 无独立模式表，借用迁移
+  switch (native) {
+    case 'bypassPermissions':
       return ['--yolo']
-    case 'auto-edit':
-    case 'default':
     default:
       return []
   }

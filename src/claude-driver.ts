@@ -162,7 +162,9 @@ export function checkSessionFile(sessionId: string, cwd: string): SessionFileSta
 
 // --- Claude 专有辅助 ---
 
+import { getModeCliArgs, migrateLegacyMode } from './mode-policy.js'
+
 function permissionArgs(mode: string): string[] {
-  if (mode === 'YOLO') return ['--dangerously-skip-permissions']
-  return ['--permission-mode', mode]
+  const native = migrateLegacyMode(mode, 'claude')
+  return getModeCliArgs('claude', native)
 }

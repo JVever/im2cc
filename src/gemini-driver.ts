@@ -158,11 +158,9 @@ function geminiExtractResult(event: Record<string, unknown>): string {
   return ''
 }
 
+import { getModeCliArgs, migrateLegacyMode } from './mode-policy.js'
+
 function geminiPermArgs(mode: string): string[] {
-  switch (mode) {
-    case 'YOLO': return ['--approval-mode', 'yolo']
-    case 'auto-edit': return ['--approval-mode', 'auto_edit']
-    case 'default': return ['--approval-mode', 'default']
-    default: return ['--approval-mode', 'default']
-  }
+  const native = migrateLegacyMode(mode, 'gemini')
+  return getModeCliArgs('gemini', native)
 }

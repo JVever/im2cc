@@ -15,7 +15,8 @@ export interface Im2ccConfig {
   }
   allowedUserIds: string[]    // 空数组 = 允许所有人（不推荐）
   pathWhitelist: string[]     // 允许绑定的目录前缀，默认 ['~/Code/']
-  defaultPermissionMode: string // YOLO | default | auto-edit
+  defaultPermissionMode: string // 旧字段，保留兼容：YOLO | default | auto-edit
+  defaultModes: Record<string, string> // per-tool 默认模式 { claude: 'bypassPermissions', codex: 'bypass', ... }
   defaultTimeoutSeconds: number // 默认 600 (10分钟)
   recapBudget: number           // /fc 时上下文回顾的字符预算，0 = 禁用
   maxFileSizeMB: number         // 文件传输最大体积，默认 10
@@ -38,6 +39,7 @@ const DEFAULT_CONFIG: Im2ccConfig = {
   allowedUserIds: [],
   pathWhitelist: [path.join(os.homedir(), 'Code')],
   defaultPermissionMode: 'default',
+  defaultModes: {},  // 空 = 使用 mode-policy 内置默认
   defaultTimeoutSeconds: 600,
   recapBudget: 2000,
   maxFileSizeMB: 10,
@@ -102,6 +104,37 @@ export function getMessageDedupDir(): string {
   ensureDirs()
   if (!fs.existsSync(MESSAGE_DEDUP_DIR)) fs.mkdirSync(MESSAGE_DEDUP_DIR, { recursive: true })
   return MESSAGE_DEDUP_DIR
+}
+
+// --- 默认模式 ---
+
+import { getBuiltinDefault, migrateLegacyMode, isValidMode } from './mode-policy.js'
+import type { ToolId } from './tool-driver.js'
+
+/** 获取工具的默认模式（优先 per-tool 配置，否则迁移旧配置，最后用内置默认） */
+export function getDefaultMode(tool: ToolId, config?: Im2ccConfig): string {
+  const cfg = config ?? loadConfig()
+
+  // 1. per-tool 配置
+  if (cfg.defaultModes?.[tool] && isValidMode(tool, cfg.defaultModes[tool])) {
+    return cfg.defaultModes[tool]
+  }
+
+  // 2. 旧 defaultPermissionMode 迁移
+  if (cfg.defaultPermissionMode && cfg.defaultPermissionMode !== 'default') {
+    return migrateLegacyMode(cfg.defaultPermissionMode, tool)
+  }
+
+  // 3. 内置默认
+  return getBuiltinDefault(tool)
+}
+
+/** 设置工具的默认模式 */
+export function setDefaultMode(tool: ToolId, modeId: string): void {
+  const config = loadConfig()
+  if (!config.defaultModes) config.defaultModes = {}
+  config.defaultModes[tool] = modeId
+  saveConfig(config)
 }
 
 // --- Telegram 配置（存在 config.json 的 telegramBotToken 字段中） ---

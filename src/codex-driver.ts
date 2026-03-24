@@ -94,9 +94,11 @@ registerDriver(new CodexDriver())
 
 // --- Codex 专有 ---
 
+import { getModeCliArgs, migrateLegacyMode } from './mode-policy.js'
+
 function codexPermArgs(mode: string): string[] {
-  if (mode === 'YOLO') return ['--full-auto']
-  return []
+  const native = migrateLegacyMode(mode, 'codex')
+  return getModeCliArgs('codex', native)
 }
 
 /** Codex NDJSON 事件文本提取 */
