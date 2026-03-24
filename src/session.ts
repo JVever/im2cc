@@ -140,10 +140,49 @@ export function listActiveBindings(): Binding[] {
 // --- 消息去重 ---
 const seenMessages = new Map<string, number>()
 const MAX_SEEN = 1000
+let seenLoaded = false
+
+function seenMessagesFile(): string {
+  return path.join(getDataDir(), 'recent-message-ids.json')
+}
+
+function loadSeenMessages(): void {
+  if (seenLoaded) return
+  seenLoaded = true
+
+  const file = seenMessagesFile()
+  if (!fs.existsSync(file)) return
+
+  try {
+    const raw = JSON.parse(fs.readFileSync(file, 'utf-8')) as Array<[string, number]>
+    for (const [id, timestamp] of raw) {
+      if (typeof id === 'string' && typeof timestamp === 'number') {
+        seenMessages.set(id, timestamp)
+      }
+    }
+  } catch {
+    // ignore invalid cache
+  }
+}
+
+function persistSeenMessages(): void {
+  const file = seenMessagesFile()
+  const tmp = file + '.tmp.' + process.pid
+  const entries = [...seenMessages.entries()].sort((a, b) => a[1] - b[1]).slice(-MAX_SEEN)
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(entries))
+    fs.renameSync(tmp, file)
+  } catch {
+    try { fs.unlinkSync(tmp) } catch {}
+  }
+}
 
 export function isDuplicate(messageId: string): boolean {
+  loadSeenMessages()
+
   if (seenMessages.has(messageId)) return true
   seenMessages.set(messageId, Date.now())
+
   // LRU 清理
   if (seenMessages.size > MAX_SEEN) {
     const oldest = [...seenMessages.entries()]
@@ -151,5 +190,7 @@ export function isDuplicate(messageId: string): boolean {
       .slice(0, MAX_SEEN / 2)
     for (const [key] of oldest) seenMessages.delete(key)
   }
+
+  persistSeenMessages()
   return false
 }

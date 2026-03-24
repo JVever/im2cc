@@ -1,5 +1,5 @@
 /**
- * @input:    Im2ccConfig, Transport adapters, Claude Code CLI, recap, file-staging
+ * @input:    Im2ccConfig, Transport adapters, AI coding tool CLIs, recap, file-staging
  * @output:   startDaemon() — 主入口：初始化各模块、启动 transport 轮询、消息路由、/fc 上下文回顾、文件暂存与合并
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
@@ -19,9 +19,8 @@ import './claude-driver.js'
 import './codex-driver.js'
 import './kimi-driver.js'
 import './gemini-driver.js'
-import './cline-driver.js'
 import { listRegistered } from './registry.js'
-import { buildRecap } from './recap.js'
+import { getDriver } from './tool-driver.js'
 import { stageFile, consumeStaged, ensureInbox, classifyFile, runInboxCleanup } from './file-staging.js'
 import { log, error } from './logger.js'
 import type { TransportAdapter, IncomingMessage, TransportType } from './transport.js'
@@ -186,7 +185,8 @@ export async function startDaemon(): Promise<void> {
           const binding = getBinding(conversationId)
           if (binding) {
             try {
-              const recap = buildRecap(binding.sessionId, binding.cwd, config.recapBudget)
+              const driver = getDriver(binding.tool ?? 'claude')
+              const recap = driver.buildRecap?.(binding.sessionId, binding.cwd, config.recapBudget) ?? null
               if (recap) await send(recap)
             } catch (err) {
               log(`[recap] 生成失败: ${err}`)
@@ -310,7 +310,7 @@ export async function startDaemon(): Promise<void> {
   }
 
   if (adapters.size === 0) {
-    error('没有可用的 transport，请先配置 IM 通道（im2cc setup / im2cc wechat login）')
+    throw new Error('没有可用的 transport，请先配置可用的 IM 通道（im2cc setup / im2cc wechat login）')
   }
 
   // 恢复上次中断的任务

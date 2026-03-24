@@ -2,11 +2,11 @@
 # im2cc 一键安装脚本
 # 用法: git clone ... && cd im2cc && bash install.sh
 
-set -e
+set -euo pipefail
 
 echo "========================================="
 echo "  im2cc 安装程序"
-echo "  IM to Claude Code 远程操控工具"
+echo "  远程操控 AI coding tools"
 echo "========================================="
 echo ""
 
@@ -52,17 +52,33 @@ else
   MISSING=1
 fi
 
-# Claude Code CLI
+AVAILABLE_TOOLS=0
+
 if command -v claude &>/dev/null; then
   CLAUDE_VER=$(claude --version 2>/dev/null || echo "未知版本")
   ok "Claude Code CLI ($CLAUDE_VER)"
+  AVAILABLE_TOOLS=$((AVAILABLE_TOOLS + 1))
 else
-  fail "Claude Code CLI 未安装"
+  warn "Claude Code CLI 未安装"
   echo "   安装: https://docs.anthropic.com/en/docs/claude-code"
-  MISSING=1
 fi
 
+for tool in codex kimi gemini; do
+  if command -v "$tool" &>/dev/null; then
+    TOOL_VER=$("$tool" --version 2>/dev/null || echo "未知版本")
+    ok "$tool CLI ($TOOL_VER)"
+    AVAILABLE_TOOLS=$((AVAILABLE_TOOLS + 1))
+  else
+    warn "$tool CLI 未安装"
+  fi
+done
+
 echo ""
+
+if [ "$AVAILABLE_TOOLS" -eq 0 ]; then
+  fail "至少需要安装一个受支持的 AI coding tool CLI（claude / codex / kimi / gemini）"
+  exit 1
+fi
 
 if [ "$MISSING" -eq 1 ]; then
   fail "请先安装以上缺失的依赖，然后重新运行 bash install.sh"
@@ -71,8 +87,8 @@ fi
 
 # --- 2. 安装项目 ---
 echo "📦 安装依赖并编译..."
-npm install --silent 2>&1 | tail -1
-npm run build 2>&1 | tail -1
+npm install --silent
+npm run build
 ok "项目编译完成"
 
 # npm link（注册全局命令）
@@ -99,11 +115,7 @@ fc()       { im2cc connect "$@"; }
 fl()       { im2cc list; }
 fk()       { im2cc delete "$@"; }
 fd()       { im2cc detach; }
-fs()       { im2cc show "$@"; }
-fn-codex() { im2cc new --tool codex "$@"; }
-fn-kimi()  { im2cc new --tool kimi "$@"; }
-fn-gemini(){ im2cc new --tool gemini "$@"; }
-fn-cline() { im2cc new --tool cline "$@"; }'
+fs()       { im2cc show "$@"; }'
 
 if [ -n "$SHELL_RC" ]; then
   if grep -q "im2cc new" "$SHELL_RC" 2>/dev/null; then
@@ -114,9 +126,9 @@ if [ -n "$SHELL_RC" ]; then
     if grep -q "im2cc" "$SHELL_RC" 2>/dev/null; then
       # Cross-platform sed in-place
       if [[ "$OSTYPE" == "darwin"* ]]; then
-        sed -i '' '/im2cc.*shell-functions/d; /# im2cc/d; /im2cc new/d; /im2cc connect/d; /im2cc list/d; /im2cc delete/d; /im2cc detach/d; /im2cc show/d; /fn-codex/d; /fn-kimi/d; /fn-gemini/d; /fn-cline/d' "$SHELL_RC"
+        sed -i '' '/im2cc.*shell-functions/d; /# im2cc/d; /im2cc new/d; /im2cc connect/d; /im2cc list/d; /im2cc delete/d; /im2cc detach/d; /im2cc show/d; /fn-codex/d; /fn-kimi/d; /fn-gemini/d' "$SHELL_RC"
       else
-        sed -i '/im2cc.*shell-functions/d; /# im2cc/d; /im2cc new/d; /im2cc connect/d; /im2cc list/d; /im2cc delete/d; /im2cc detach/d; /im2cc show/d; /fn-codex/d; /fn-kimi/d; /fn-gemini/d; /fn-cline/d' "$SHELL_RC"
+        sed -i '/im2cc.*shell-functions/d; /# im2cc/d; /im2cc new/d; /im2cc connect/d; /im2cc list/d; /im2cc delete/d; /im2cc detach/d; /im2cc show/d; /fn-codex/d; /fn-kimi/d; /fn-gemini/d' "$SHELL_RC"
       fi
     fi
     echo "" >> "$SHELL_RC"

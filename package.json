@@ -1,7 +1,7 @@
 {
   "name": "im2cc",
   "version": "0.2.0",
-  "description": "IM to AI Coding Tools — 通过飞书/微信/Telegram/钉钉远程操控本地 AI 编程工具",
+  "description": "通过飞书或微信远程操控本地 AI coding tools，电脑与手机无缝流转",
   "type": "module",
   "main": "dist/src/index.js",
   "bin": {
@@ -11,7 +11,8 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "start": "node dist/src/index.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "smoke": "bash scripts/smoke.sh"
   },
   "engines": {
     "node": ">=20"

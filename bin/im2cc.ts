@@ -23,9 +23,17 @@ import '../src/claude-driver.js'
 import '../src/codex-driver.js'
 import '../src/kimi-driver.js'
 import '../src/gemini-driver.js'
-import '../src/cline-driver.js'
 
 const command = process.argv[2]
+
+function resumeCommand(tool: ToolId, sessionId: string): string {
+  switch (tool) {
+    case 'claude': return `claude --resume ${sessionId}`
+    case 'codex': return `codex resume ${sessionId}`
+    case 'kimi': return `kimi --session ${sessionId}`
+    case 'gemini': return `gemini --resume ${sessionId}`
+  }
+}
 
 switch (command) {
   case 'start': await cmdStart(); break
@@ -45,7 +53,7 @@ switch (command) {
   case 'doctor': cmdDoctor(); break
   case 'wechat': await cmdWeChat(); break
   default:
-    console.log(`im2cc — IM to Claude Code
+    console.log(`im2cc — IM to AI coding tools
 
 用法: im2cc <command>
 
@@ -118,10 +126,9 @@ function findTmuxSession(name: string, tool: string = 'claude'): string | null {
 function toolCreateArgs(tool: ToolId, sessionId: string, name: string): string[] {
   switch (tool) {
     case 'claude': return ['claude', '--session-id', sessionId, '--dangerously-skip-permissions', '--name', `im2cc:${name}`]
-    case 'codex':  return ['codex']   // 交互 REPL
+    case 'codex':  return ['codex', '--skip-git-repo-check']
     case 'kimi':   return ['kimi']    // 交互模式
     case 'gemini': return ['gemini']  // 交互模式
-    case 'cline':  return ['cline']   // 交互模式
     default:       return [tool]
   }
 }
@@ -133,10 +140,9 @@ function toolCreateArgs(tool: ToolId, sessionId: string, name: string): string[]
 function toolResumeArgs(tool: ToolId, sessionId: string, name: string): string[] {
   switch (tool) {
     case 'claude': return ['claude', '--resume', sessionId, '--dangerously-skip-permissions', '--name', `im2cc:${name}`]
-    case 'codex':  return ['codex', '--resume']              // 恢复最近 session
+    case 'codex':  return ['codex', '--skip-git-repo-check', 'resume', sessionId]
     case 'kimi':   return ['kimi', '--session', sessionId]   // 恢复指定 session
     case 'gemini': return ['gemini', '--resume', sessionId]  // 恢复指定 session
-    case 'cline':  return ['cline', '--resume', sessionId]   // 恢复指定 session
     default:       return [tool, '--resume', sessionId]
   }
 }
@@ -287,9 +293,9 @@ async function cmdNew(): Promise<void> {
   const pathArg = args[1]
 
   if (!name) {
-    console.log('用法: im2cc new [--tool <工具>] <对话名称> [项目路径]')
+    console.log('用法: im2cc new [--tool claude|codex|kimi|gemini] <对话名称> [项目路径]')
     console.log('例如: im2cc new auth-refactor ~/Code/im2cc')
-    console.log('      im2cc new --tool codex myproject')
+    console.log('      im2cc new --tool codex auth-refactor ~/Code/im2cc')
     console.log('      im2cc new bugfix       (使用当前目录)')
     return
   }
@@ -302,7 +308,7 @@ async function cmdNew(): Promise<void> {
 
   // 检查工具是否已注册
   if (!hasDriver(tool)) {
-    console.log(`❌ 工具 "${tool}" 未注册。可用工具: claude, codex, kimi, gemini, cline`)
+    console.log(`❌ 工具 "${tool}" 未注册。可用工具: claude, codex, kimi, gemini`)
     return
   }
 
@@ -327,17 +333,8 @@ async function cmdNew(): Promise<void> {
 
   try {
     const driver = getDriver(tool)
-    let sessionId: string
-
-    if (tool === 'claude') {
-      // Claude 需要预创建 session 文件（headless），之后 --resume 才能找到
-      const result = await driver.createSession(validation.resolvedPath, config.defaultPermissionMode ?? 'default', name)
-      sessionId = result.sessionId
-    } else {
-      // 其他工具：直接生成 UUID 注册，交互启动时工具自己管理 session
-      const crypto = await import('node:crypto')
-      sessionId = crypto.randomUUID()
-    }
+    const result = await driver.createSession(validation.resolvedPath, config.defaultPermissionMode ?? 'default', name)
+    const sessionId = result.sessionId
 
     register(name, sessionId, validation.resolvedPath, tool)
 
@@ -353,10 +350,7 @@ async function cmdNew(): Promise<void> {
     }
 
     try {
-      // Claude 用 resume（session 已在 headless 中创建），其他工具用 create（首次交互启动）
-      const tmuxArgs = tool === 'claude'
-        ? toolResumeArgs(tool, sessionId, name)
-        : toolCreateArgs(tool, sessionId, name)
+      const tmuxArgs = toolResumeArgs(tool, sessionId, name)
       execFileSync('tmux', [
         'new-session', '-d', '-s', tmuxSession, '-c', validation.resolvedPath,
         ...tmuxArgs,
@@ -370,9 +364,7 @@ async function cmdNew(): Promise<void> {
       // tmux 不可用，直接启动
       console.log(`✅ 已创建 "${name}"`)
       console.log(`   打开: im2cc connect ${name}`)
-      const tmuxArgs = tool === 'claude'
-        ? toolResumeArgs(tool, sessionId, name)
-        : toolCreateArgs(tool, sessionId, name)
+      const tmuxArgs = toolResumeArgs(tool, sessionId, name)
       execFileSync(tmuxArgs[0], tmuxArgs.slice(1), { stdio: 'inherit', cwd: validation.resolvedPath })
     }
   } catch (err) {
@@ -446,8 +438,8 @@ async function cmdConnect(): Promise<void> {
 
   // tmux session 不存在，重新创建
   const driver = getDriver(tool as ToolId)
-  const status = driver.checkSessionFile(session.sessionId, session.cwd)
-  if (status === 'elsewhere') {
+  const status = tool === 'claude' ? driver.checkSessionFile(session.sessionId, session.cwd) : 'here'
+  if (tool === 'claude' && status === 'elsewhere') {
     console.log(`❌ session ${session.sessionId.slice(0, 8)} 存在于错误的项目目录`)
     console.log(`   registry 中 cwd=${session.cwd} 与 session 文件位置不匹配`)
     console.log(`   请 im2cc delete ${session.name} 后重新 im2cc new`)
@@ -590,7 +582,7 @@ function cmdDelete(): void {
 
   remove(session.name)
   console.log(`✅ 已删除 "${session.name}"`)
-  console.log(`   如需恢复: claude --resume ${session.sessionId}`)
+  console.log(`   如需恢复: ${resumeCommand((session.tool ?? 'claude') as ToolId, session.sessionId)}`)
 }
 
 /** im2cc detach — 从当前 tmux 会话断开 */
@@ -711,11 +703,15 @@ function cmdDoctor(): void {
   // AI 编程工具
   const claudeVersion = getClaudeVersion()
   console.log(`claude: ${claudeVersion === 'unknown' ? '⬤ 未安装' : '✅ ' + claudeVersion}`)
-  // 检查其他工具（简单的 which 检查）
-  for (const tool of ['codex', 'kimi', 'gemini', 'cline']) {
+  for (const tool of ['codex', 'kimi', 'gemini']) {
     try {
-      const ver = execFileSync(tool, ['--version'], { encoding: 'utf-8', timeout: 5000 }).trim()
-      console.log(`${tool}: ✅ ${ver}`)
+      execFileSync('which', [tool], { stdio: 'ignore' })
+      try {
+        const ver = execFileSync(tool, ['--version'], { encoding: 'utf-8', timeout: 5000 }).trim()
+        console.log(`${tool}: ✅ ${ver}`)
+      } catch {
+        console.log(`${tool}: ✅ 已安装（版本未知）`)
+      }
     } catch {
       console.log(`${tool}: ⬤ 未安装`)
     }

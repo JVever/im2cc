@@ -23,6 +23,15 @@ export interface ParsedCommand {
 // 统一命令名：电脑端和飞书端完全一致
 const COMMANDS = new Set(['fn', 'fc', 'fl', 'fk', 'fs', 'fd', 'mode', 'stop', 'help'])
 
+function resumeCommand(tool: ToolId, sessionId: string): string {
+  switch (tool) {
+    case 'claude': return `claude --resume ${sessionId}`
+    case 'codex': return `codex resume ${sessionId}`
+    case 'kimi': return `kimi --session ${sessionId}`
+    case 'gemini': return `gemini --resume ${sessionId}`
+  }
+}
+
 export function parseCommand(text: string): ParsedCommand | null {
   const trimmed = text.trim()
   if (!trimmed.startsWith('/')) return null
@@ -56,7 +65,7 @@ async function handleFn(args: string, conversationId: string, config: Im2ccConfi
     const projects = listProjects(config)
     if (projects.length === 0) return `${config.pathWhitelist.join(', ')} 下没有找到项目目录`
     const list = projects.map((p, i) => `  ${i + 1}. ${p}`).join('\n')
-    return `📁 可用项目:\n${list}\n\n用法: /fn <对话名称> [项目名] [--tool codex]\n例如: /fn auth-refactor im2cc`
+    return `📁 可用项目:\n${list}\n\n用法: /fn <对话名称> [项目名] [--tool claude|codex|kimi|gemini]\n例如: /fn auth-refactor im2cc --tool codex`
   }
 
   const existing = getBinding(conversationId)
@@ -74,7 +83,7 @@ async function handleFn(args: string, conversationId: string, config: Im2ccConfi
   }
 
   const sessionName = argParts[0]
-  if (!sessionName) return '用法: /fn <对话名称> [项目名] [--tool codex]'
+  if (!sessionName) return '用法: /fn <对话名称> [项目名] [--tool claude|codex|kimi|gemini]'
   if (!isValidSessionName(sessionName)) {
     return `❌ 名称 "${sessionName}" 不合法\n只允许字母、数字、连字符和下划线`
   }
@@ -82,7 +91,7 @@ async function handleFn(args: string, conversationId: string, config: Im2ccConfi
 
   // 检查 driver 是否可用
   if (!hasDriver(tool)) {
-    return `❌ 工具 "${tool}" 未注册\n当前可用: claude`
+    return `❌ 工具 "${tool}" 未注册\n当前可用: claude, codex, kimi, gemini`
   }
   const driver = getDriver(tool)
   if (!driver.isAvailable()) {
@@ -380,7 +389,7 @@ function handleFk(args: string, conversationId: string): string {
 
   const toolHint = session.tool === 'claude'
     ? `claude --resume ${session.sessionId}`
-    : `${session.tool} (session 已由 im2cc 管理)`
+    : resumeCommand((session.tool ?? 'claude') as ToolId, session.sessionId)
   return [
     `✅ 已终止 "${args}"`,
     `如需恢复: ${toolHint}`,

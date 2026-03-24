@@ -10,7 +10,8 @@ import path from 'node:path'
 import { execSync } from 'node:child_process'
 import { log } from './logger.js'
 import { pathToSlug } from './discover.js'
-import { BaseToolDriver } from './base-driver.js'
+import { BaseToolDriver, selectTurns, formatRecap, type RecapTurn } from './base-driver.js'
+import { filterInitTurns } from './recap.js'
 import { registerDriver, type ToolCapabilities, type CreateSessionResult, type SendMessageOptions, type SessionFileStatus } from './tool-driver.js'
 
 export class ClaudeDriver extends BaseToolDriver {
@@ -85,6 +86,63 @@ export class ClaudeDriver extends BaseToolDriver {
     } catch {}
 
     return 'missing'
+  }
+
+  /** Claude 专有 recap：从 ~/.claude/projects/{slug}/{sessionId}.jsonl 提取最近对话 */
+  override buildRecap(sessionId: string, cwd: string, budget: number): string | null {
+    if (budget <= 0) return null
+    const filePath = path.join(os.homedir(), '.claude', 'projects', pathToSlug(cwd), `${sessionId}.jsonl`)
+    if (!fs.existsSync(filePath)) {
+      log(`[claude-driver] recap: session 文件不存在: ${filePath}`)
+      return null
+    }
+    let content: string
+    try { content = fs.readFileSync(filePath, 'utf-8') } catch { return null }
+
+    const turns: RecapTurn[] = []
+    let currentUserText = ''
+    let currentAssistantTexts: string[] = []
+
+    for (const line of content.split('\n')) {
+      if (!line.trim()) continue
+      let obj: Record<string, unknown>
+      try { obj = JSON.parse(line) } catch { continue }
+      if (obj.type !== 'user' && obj.type !== 'assistant') continue
+      const msg = obj.message as Record<string, unknown> | undefined
+      if (!msg) continue
+
+      if (obj.type === 'user') {
+        const c = msg.content
+        if (typeof c !== 'string') continue
+        // 跳过系统注入的 local-command 消息
+        if (c.includes('<local-command-')) continue
+        if (currentUserText) {
+          const aText = currentAssistantTexts.join('\n').trim()
+          if (aText) turns.push({ user: currentUserText, assistant: aText })
+        }
+        currentUserText = c.trim()
+        currentAssistantTexts = []
+      }
+      if (obj.type === 'assistant') {
+        const c = msg.content
+        if (Array.isArray(c)) {
+          for (const b of c as Array<Record<string, unknown>>) {
+            if (b.type === 'text' && typeof b.text === 'string') currentAssistantTexts.push(b.text)
+          }
+        } else if (typeof c === 'string' && c) {
+          currentAssistantTexts.push(c)
+        }
+      }
+    }
+    if (currentUserText) {
+      const aText = currentAssistantTexts.join('\n').trim()
+      if (aText) turns.push({ user: currentUserText, assistant: aText })
+    }
+
+    const meaningful = filterInitTurns(turns)
+    if (meaningful.length === 0) return null
+    const selected = selectTurns(meaningful, budget)
+    return selected.length > 0 ? formatRecap(selected, budget) : null
   }
 }
 

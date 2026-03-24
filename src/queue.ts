@@ -203,14 +203,14 @@ async function processNext(
         onTurnText: (text) => {
           // 每轮 assistant 文字就绪后立即发到 IM
           streamed = true
-          sendReply(formatOutput(text, binding.sessionId, binding.transport)).catch(() => {})
+          sendReply(formatOutput(text, binding.sessionId, binding.transport, binding.tool)).catch(() => {})
         },
       },
     )
 
     updateBinding(conversationId, { turnCount: binding.turnCount + 1 })
     // 如果已经流式发送过，不再重复发最终累积文本
-    msg.resolve(streamed ? '' : formatOutput(output, binding.sessionId, binding.transport))
+    msg.resolve(streamed ? '' : formatOutput(output, binding.sessionId, binding.transport, binding.tool))
   } catch (err) {
     msg.reject(err instanceof Error ? err : new Error(String(err)))
   } finally {
@@ -274,9 +274,10 @@ export async function recoverOnStartup(
       // 获取 transport 类型用于格式化
       const recoveryBinding = getBinding(meta.conversationId)
       const recoveryTransport = recoveryBinding?.transport ?? 'feishu' as const
+      const recoveryTool = recoveryBinding?.tool ?? 'claude'
 
       if (resultText) {
-        await sendToGroup(meta.conversationId, formatOutput(resultText, meta.sessionId, recoveryTransport))
+        await sendToGroup(meta.conversationId, formatOutput(resultText, meta.sessionId, recoveryTransport, recoveryTool))
         log(`[recovery] 已发送 "${meta.text.slice(0, 30)}..." 的结果`)
       } else {
         await sendToGroup(meta.conversationId,

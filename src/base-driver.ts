@@ -7,7 +7,6 @@
 import fs from 'node:fs'
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import crypto from 'node:crypto'
-import { log } from './logger.js'
 import type { ToolDriver, ToolId, ToolCapabilities, CreateSessionResult, SendMessageOptions, SessionFileStatus } from './tool-driver.js'
 
 /** runTool 的选项 */
@@ -16,9 +15,11 @@ export interface RunToolOptions {
   args: string[]         // CLI 完整参数（不含命令名）
   cmd: string            // CLI 命令名
   cwd: string
+  env?: NodeJS.ProcessEnv
   onSpawn?: (child: ChildProcess) => void
   outputFile?: string
   onTurnText?: (text: string) => void
+  onEvent?: (event: Record<string, unknown>) => void
   /** 从 NDJSON 事件中提取 assistant 文本的函数 */
   extractText?: (event: Record<string, unknown>) => string
   /** 从 NDJSON 事件中提取 result 文本的函数 */
@@ -41,6 +42,11 @@ export abstract class BaseToolDriver implements ToolDriver {
   /** 默认：不支持 session 文件检查（子类可覆盖） */
   checkSessionFile(_sessionId: string, _cwd: string): SessionFileStatus {
     return 'missing'
+  }
+
+  /** 默认：不支持 recap（子类可覆盖） */
+  buildRecap(_sessionId: string, _cwd: string, _budget: number): string | null {
+    return null
   }
 
   /** 通用：杀掉 tmux 中的本地 session */
@@ -111,6 +117,7 @@ export abstract class BaseToolDriver implements ToolDriver {
     return new Promise((resolve, reject) => {
       const child = spawn(opts.cmd, opts.args, {
         cwd: opts.cwd,
+        env: opts.env,
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: true,
       })
@@ -127,6 +134,7 @@ export abstract class BaseToolDriver implements ToolDriver {
       const extractResult = opts.extractResult ?? defaultExtractResult
 
       function handleEvent(event: Record<string, unknown>): void {
+        opts.onEvent?.(event)
         const text = extractText(event)
         if (text) {
           turnTexts.push(text)
@@ -166,7 +174,7 @@ export abstract class BaseToolDriver implements ToolDriver {
           }
         }
 
-        const resultText = turnTexts.length > 1
+        const resultText = turnTexts.length > 0
           ? turnTexts.join('\n\n---\n\n')
           : resultParts.join('\n\n---\n\n')
 
@@ -207,4 +215,41 @@ function defaultExtractText(event: Record<string, unknown>): string {
 function defaultExtractResult(event: Record<string, unknown>): string {
   if (event.type === 'result' && typeof event.result === 'string') return event.result
   return ''
+}
+
+// --- recap 通用工具（供各 driver 的 buildRecap 使用）---
+
+export interface RecapTurn {
+  user: string
+  assistant: string
+}
+
+/** 根据字符预算从末尾选取完整轮次 */
+export function selectTurns(turns: RecapTurn[], budget: number): RecapTurn[] {
+  if (turns.length === 0) return []
+  const selected: RecapTurn[] = []
+  let spent = 0
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const cost = turns[i].user.length + turns[i].assistant.length
+    if (selected.length === 0) { selected.unshift(turns[i]); spent = cost }
+    else if (spent + cost <= budget) { selected.unshift(turns[i]); spent += cost }
+    else break
+  }
+  return selected
+}
+
+/** 格式化轮次为 IM 消息文本 */
+export function formatRecap(turns: RecapTurn[], budget: number): string {
+  const parts: string[] = ['📋 最近对话回顾:']
+  for (const turn of turns) {
+    parts.push('---')
+    parts.push(`👤 ${turn.user}`)
+    let assistantText = turn.assistant
+    if (turns.length === 1 && turn.user.length + assistantText.length > budget) {
+      const maxLen = Math.max(budget - turn.user.length - 50, 200)
+      assistantText = assistantText.slice(0, maxLen) + '\n…(已截断)'
+    }
+    parts.push(`🤖 ${assistantText}`)
+  }
+  return parts.join('\n')
 }

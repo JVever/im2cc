@@ -15,7 +15,7 @@ export interface Im2ccConfig {
   }
   allowedUserIds: string[]    // 空数组 = 允许所有人（不推荐）
   pathWhitelist: string[]     // 允许绑定的目录前缀，默认 ['~/Code/']
-  defaultPermissionMode: string // plan | auto | default | auto-edit
+  defaultPermissionMode: string // YOLO | default | auto-edit
   defaultTimeoutSeconds: number // 默认 600 (10分钟)
   recapBudget: number           // /fc 时上下文回顾的字符预算，0 = 禁用
   maxFileSizeMB: number         // 文件传输最大体积，默认 10
@@ -35,7 +35,7 @@ const DEFAULT_CONFIG: Im2ccConfig = {
   feishu: { appId: '', appSecret: '' },
   allowedUserIds: [],
   pathWhitelist: [path.join(os.homedir(), 'Code')],
-  defaultPermissionMode: 'YOLO',
+  defaultPermissionMode: 'default',
   defaultTimeoutSeconds: 600,
   recapBudget: 2000,
   maxFileSizeMB: 10,
@@ -58,7 +58,14 @@ export function loadConfig(): Im2ccConfig {
   }
   const raw = fs.readFileSync(CONFIG_FILE, 'utf-8')
   const parsed = JSON.parse(raw) as Partial<Im2ccConfig>
-  return { ...DEFAULT_CONFIG, ...parsed }
+  return {
+    ...DEFAULT_CONFIG,
+    ...parsed,
+    feishu: {
+      ...DEFAULT_CONFIG.feishu,
+      ...parsed.feishu,
+    },
+  }
 }
 
 export function saveConfig(config: Im2ccConfig): void {
@@ -69,12 +76,11 @@ export function saveConfig(config: Im2ccConfig): void {
 }
 
 export function configExists(): boolean {
+  const wa = loadWeChatAccount()
+  if (wa !== null && wa.botToken !== '') return true
   if (!fs.existsSync(CONFIG_FILE)) return false
   const c = loadConfig()
   if (c.feishu.appId !== '') return true
-  // WeChat-only 配置也视为有效
-  const wa = loadWeChatAccount()
-  if (wa !== null && wa.botToken !== '') return true
   if (loadTelegramBotToken()) return true
   if (loadDingTalkConfig()) return true
   return false

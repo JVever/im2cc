@@ -1,6 +1,6 @@
-# im2cc 安装指南（Claude Code 执行用）
+# im2cc 安装指南（AI coding tool 执行用）
 
-> 本文件供 Claude Code 读取并自动执行安装。用户不需要手动操作本文件中的步骤。
+> 本文件供 Claude Code / Codex / Kimi Code / Gemini CLI 读取并自动执行安装。用户不需要手动操作本文件中的步骤。
 
 ## 安装步骤
 
@@ -12,7 +12,7 @@
 
 - **Node.js >= 20**：运行 `node -v` 检查。如果未安装或版本过低，macOS 用 `brew install node`，Linux 用 `curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs`，或使用 nvm。
 - **tmux**：运行 `tmux -V` 检查。如果未安装，macOS 用 `brew install tmux`，Linux 用 `sudo apt install tmux`。
-- **Claude Code CLI**：你正在运行我，所以这个已经满足了。
+- **至少一个 AI coding tool CLI**：`claude` / `codex` / `kimi` / `gemini` 至少安装一个；如果用户计划完整使用多工具流转，则四个都建议检查。安装后确认对应 CLI 已登录或完成鉴权。
 
 如果 macOS 上 `brew` 不可用，先安装 Homebrew：`/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
 
@@ -42,7 +42,6 @@ fs()       { im2cc show "$@"; }
 fn-codex() { im2cc new --tool codex "$@"; }
 fn-kimi()  { im2cc new --tool kimi "$@"; }
 fn-gemini(){ im2cc new --tool gemini "$@"; }
-fn-cline() { im2cc new --tool cline "$@"; }
 ```
 
 **注意**：添加前先检查是否已经存在 `im2cc new` 的行，避免重复。如果存在旧格式（`source` 外部文件），先删除旧行再添加新格式。
@@ -98,6 +97,7 @@ im2cc doctor
 
 安装完成后，简要告诉用户：
 - 在电脑上用 `fn <名称> <项目路径>` 创建对话
+- 如果要指定工具，用 `fn --tool codex|kimi|gemini <名称> <项目路径>`
 - 离开电脑后在飞书/微信中用 `/fc <名称>` 接入
 - 回到电脑后用 `fc <名称>` 接回
 - 用 `fl` 查看所有对话

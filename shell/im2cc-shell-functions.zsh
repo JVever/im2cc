@@ -10,9 +10,3 @@ fl()       { im2cc list; }
 fk()       { im2cc delete "$@"; }
 fd()       { im2cc detach; }
 fs()       { im2cc show "$@"; }
-
-# 工具快捷别名
-fn-codex() { im2cc new --tool codex "$@"; }
-fn-kimi()  { im2cc new --tool kimi "$@"; }
-fn-gemini(){ im2cc new --tool gemini "$@"; }
-fn-cline() { im2cc new --tool cline "$@"; }
