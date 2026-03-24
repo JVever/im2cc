@@ -1,14 +1,13 @@
 /**
  * @input:    Im2ccConfig, Transport adapters, AI coding tool CLIs, recap, file-staging
- * @output:   startDaemon() — 主入口：初始化各模块、启动 transport 轮询、消息路由、/fc 上下文回顾、文件暂存与合并
+ * @output:   startDaemon() — 主入口：初始化各模块、守护进程单实例锁、启动 transport 轮询、消息路由、/fc 上下文回顾、文件暂存与合并
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
-import { loadConfig, getPidFile, loadWeChatAccount, loadTelegramBotToken, loadDingTalkConfig } from './config.js'
+import { loadConfig, getPidFile, getDaemonLockDir, loadWeChatAccount, loadTelegramBotToken, loadDingTalkConfig } from './config.js'
 import { isUserAllowed } from './security.js'
 import { isDuplicate, listActiveBindings, getBinding, archiveBinding } from './session.js'
 import { parseCommand, handleCommand } from './commands.js'
@@ -24,6 +23,19 @@ import { getDriver } from './tool-driver.js'
 import { stageFile, consumeStaged, ensureInbox, classifyFile, runInboxCleanup } from './file-staging.js'
 import { log, error } from './logger.js'
 import type { TransportAdapter, IncomingMessage, TransportType } from './transport.js'
+import {
+  DAEMON_LOCK_STARTUP_GRACE_MS,
+  DAEMON_MARKER,
+  daemonMainModulePath,
+  inspectProcess,
+  isDaemonEntrypointInvocation,
+  isIm2ccDaemonProcess,
+  listDaemonProcessPids,
+  prepareDaemonProcessIdentity,
+  readDaemonPidRecord,
+} from './daemon-process.js'
+
+const DAEMON_ENTRY = daemonMainModulePath()
 
 /** 检查某个 session 是否正在被本地 tmux 使用（兼容新旧 tmux 命名格式） */
 function isSessionLocallyActive(sessionName: string, tool: string = 'claude'): boolean {
@@ -40,33 +52,102 @@ function isSessionLocallyActive(sessionName: string, tool: string = 'claude'): b
 /** 单实例保护：确保只有一个守护进程在运行 */
 function acquireLock(): boolean {
   const pidFile = getPidFile()
+  const lockDir = getDaemonLockDir()
+  const lockMetaFile = path.join(lockDir, 'owner.json')
 
-  if (fs.existsSync(pidFile)) {
-    const existingPid = parseInt(fs.readFileSync(pidFile, 'utf-8').trim())
-    if (!isNaN(existingPid)) {
-      try {
-        process.kill(existingPid, 0)
-        error(`另一个 im2cc 守护进程已在运行 (PID: ${existingPid})，本次启动终止`)
-        return false
-      } catch {
-        log(`清理过期 PID 文件 (旧 PID: ${existingPid})`)
-      }
+  const existingDaemonPids = listDaemonProcessPids(DAEMON_ENTRY)
+  if (existingDaemonPids.length > 0) {
+    error(`检测到已运行的 im2cc 守护进程 (PID: ${existingDaemonPids.join(', ')})，本次启动终止`)
+    return false
+  }
+
+  const writePidFile = () => {
+    fs.writeFileSync(pidFile, String(process.pid))
+  }
+
+  const removePidFileIfOwned = () => {
+    try {
+      if (!fs.existsSync(pidFile)) return
+      const ownerPid = parseInt(fs.readFileSync(pidFile, 'utf-8').trim(), 10)
+      if (ownerPid === process.pid) fs.unlinkSync(pidFile)
+    } catch {}
+  }
+
+  const removeLockIfOwned = () => {
+    try {
+      if (!fs.existsSync(lockMetaFile)) return
+      const raw = JSON.parse(fs.readFileSync(lockMetaFile, 'utf-8')) as Record<string, unknown>
+      if (raw.pid === process.pid) fs.rmSync(lockDir, { recursive: true, force: true })
+    } catch {}
+  }
+
+  const cleanup = () => {
+    removePidFileIfOwned()
+    removeLockIfOwned()
+  }
+
+  const tryAcquire = (): boolean => {
+    try {
+      fs.mkdirSync(lockDir)
+      fs.writeFileSync(lockMetaFile, JSON.stringify({
+        pid: process.pid,
+        marker: DAEMON_MARKER,
+        entry: DAEMON_ENTRY,
+        acquiredAt: new Date().toISOString(),
+      }))
+      writePidFile()
+      process.once('exit', cleanup)
+      process.once('SIGTERM', () => { cleanup(); process.exit(0) })
+      process.once('SIGINT', () => { cleanup(); process.exit(0) })
+      return true
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+      return false
     }
   }
 
-  fs.writeFileSync(pidFile, String(process.pid))
+  if (tryAcquire()) return true
 
-  const cleanup = () => {
-    try { if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile) } catch {}
+  const daemonPidRecord = readDaemonPidRecord()
+  const existingPid = daemonPidRecord.pid
+
+  if (existingPid !== null) {
+    if (isIm2ccDaemonProcess(existingPid, DAEMON_ENTRY)) {
+      error(`另一个 im2cc 守护进程已在运行 (PID: ${existingPid})，本次启动终止`)
+      return false
+    }
+    const state = inspectProcess(existingPid) === 'running' ? '无关进程占用了旧 PID' : '旧 PID 已失效'
+    log(`清理过期守护进程锁 (${state}: ${existingPid})`)
   }
-  process.on('exit', cleanup)
-  process.on('SIGTERM', () => { cleanup(); process.exit(0) })
-  process.on('SIGINT', () => { cleanup(); process.exit(0) })
 
-  return true
+  if (existingPid === null) {
+    try {
+      const stat = fs.statSync(lockDir)
+      if ((Date.now() - stat.mtimeMs) < DAEMON_LOCK_STARTUP_GRACE_MS) {
+        error('另一个 im2cc 守护进程正在启动中，本次启动终止')
+        return false
+      }
+      const reason = daemonPidRecord.present ? '清理无效守护进程锁元数据' : '清理无主守护进程锁'
+      log(reason)
+    } catch {}
+  }
+
+  try {
+    fs.rmSync(lockDir, { recursive: true, force: true })
+  } catch {}
+  try {
+    fs.unlinkSync(pidFile)
+  } catch {}
+
+  if (tryAcquire()) return true
+
+  error('另一个 im2cc 守护进程正在启动中，本次启动终止')
+  return false
 }
 
 export async function startDaemon(): Promise<void> {
+  prepareDaemonProcessIdentity()
+
   if (!acquireLock()) {
     process.exit(1)
   }
@@ -105,7 +186,17 @@ export async function startDaemon(): Promise<void> {
   async function handleMessage(msg: IncomingMessage): Promise<void> {
     const { messageId, conversationId, senderId, transport } = msg
 
-    if (isDuplicate(messageId)) return
+    const dedupKey = `${transport}:${conversationId}:${messageId}`
+    log(`[dedup] 检查: msgId=${messageId.slice(0, 20)} key=${dedupKey.slice(0, 60)}`)
+    if (isDuplicate(dedupKey)) {
+      log(`[dedup] 重复消息已过滤: ${messageId.slice(0, 20)}`)
+      return
+    }
+    log(`[dedup] 新消息通过: ${messageId.slice(0, 20)}`)
+
+    const adapter = adapters.get(transport)
+    /** 给消息加表情回应 */
+    const react = (emoji: string) => { adapter?.addReaction?.(messageId, emoji).catch(() => {}) }
 
     if (!isUserAllowed(senderId, config)) {
       log(`拒绝未授权用户: ${senderId}`)
@@ -116,6 +207,7 @@ export async function startDaemon(): Promise<void> {
 
     // 文件消息处理
     if (msg.kind === 'file') {
+      react('EYES')  // 👀 已收到文件
       log(`收到文件 [${conversationId}] ${senderId}: ${msg.fileName}`)
 
       const binding = getBinding(conversationId)
@@ -177,6 +269,19 @@ export async function startDaemon(): Promise<void> {
     const cmd = parseCommand(text!)
 
     if (cmd) {
+      // 命令场景化表情
+      const cmdEmoji: Record<string, string> = {
+        fc: 'THUMBSUP',       // 👍 接入成功
+        fk: 'DONE',           // ✅ 终止完成
+        fl: 'OK',             // 👌 查询
+        fs: 'OK',             // 👌 查询
+        fd: 'OK',             // 👌 断开
+        fn: 'THUMBSUP',       // 👍 创建成功
+        mode: 'OK',           // 👌 设置
+        stop: 'DONE',         // ✅ 中断完成
+      }
+      react(cmdEmoji[cmd.command] ?? 'OK')
+
       try {
         const reply = await handleCommand(cmd, conversationId, config, transport)
         await send(reply)
@@ -198,7 +303,8 @@ export async function startDaemon(): Promise<void> {
         await send(`命令执行失败: ${err instanceof Error ? err.message : String(err)}`)
       }
     } else {
-      // 普通消息：入队列发给 Claude
+      // 普通消息：入队列发给 AI 工具
+      react('OnIt')  // 🫡 收到，在处理
       const binding = getBinding(conversationId)
       if (!binding) {
         const registered = listRegistered()
@@ -342,8 +448,7 @@ export async function startDaemon(): Promise<void> {
 }
 
 // 被 fork() 或 node 直接执行时，自动启动 daemon
-const __filename = fileURLToPath(import.meta.url)
-if (process.argv[1] === __filename) {
+if (isDaemonEntrypointInvocation(process.argv, DAEMON_ENTRY)) {
   startDaemon().catch(e => {
     error(`startDaemon 失败: ${e}`)
     process.exit(1)
