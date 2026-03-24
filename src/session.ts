@@ -15,7 +15,7 @@ export interface Binding {
   id: string
   transport: TransportType  // 'feishu' | 'wechat'
   conversationId: string    // 飞书群 ID / 微信用户标识
-  tool: ToolId              // 'claude' | 'codex' | 'kimi' | ...
+  tool: ToolId              // 'claude' | 'codex' | 'gemini'
   sessionId: string
   cwd: string
   permissionMode: string

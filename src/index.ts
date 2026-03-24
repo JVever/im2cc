@@ -449,11 +449,16 @@ export async function startDaemon(): Promise<void> {
   )
 
   // 发送重启通知（仅飞书，微信不支持主动推送）
+  const registered = listRegistered()
   for (const binding of activeBindings) {
     if (binding.transport === 'feishu' || !binding.transport) {
       try {
+        const reg = registered.find(r => r.sessionId === binding.sessionId)
+        const name = reg?.name ?? '(未注册)'
+        const tool = binding.tool ?? reg?.tool ?? 'claude'
+        const toolLabel = tool === 'claude' ? 'Claude Code' : tool.charAt(0).toUpperCase() + tool.slice(1)
         await sendToConversation('feishu', binding.conversationId,
-          `🔄 im2cc 已重启\n📁 ${binding.cwd}\n🔑 Session: ${binding.sessionId}\n⚙️ 模式: ${binding.permissionMode}`)
+          `🔄 im2cc 已重启\n📌 ${name} · ${toolLabel}\n📁 ${path.basename(binding.cwd)}\n⚙️ 模式: ${binding.permissionMode}`)
       } catch { /* 群可能已被删除 */ }
     }
   }

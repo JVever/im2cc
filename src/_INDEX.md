@@ -8,18 +8,21 @@ im2cc 核心业务逻辑：IM 消息接收 → 命令路由 → 本地 AI coding
 - index.ts：主入口，初始化各模块、启动飞书连接、消息路由、崩溃恢复
 - daemon-process.ts：守护进程进程识别与 PID/锁元数据校验，供 CLI 和 daemon 共享
 - config.ts：配置加载 (~/.im2cc/config.json)
+- support-policy.ts：正式支持 / best-effort 支持矩阵常量与公共文案
 - security.ts：用户白名单检查、路径验证与白名单
+- tool-cli-args.ts：各工具交互式 CLI 参数映射（tmux create/resume + resume hint）
 - session.ts：Session 绑定 CRUD、原子写、消息去重
 - claude-driver.ts：Claude Code CLI 驱动（spawn、stream-json 解析、中断）
 - codex-driver.ts：Codex CLI 驱动（thread_id 创建、resume、输出解析）
-- kimi-driver.ts：Kimi Code CLI 驱动（真实 session 目录发现、resume、输出解析）
-- gemini-driver.ts：Gemini CLI 驱动（session_id 创建、resume、输出解析）
+- gemini-driver.ts：Gemini CLI 驱动（best-effort，session_id 创建、resume、输出解析）
 - queue.ts：消息队列（per-group FIFO）、Job 三态管理、超时、控制面分离
 - commands.ts：命令解析与各命令处理函数（含 /fc 双参数注册模式，支持分叉对话流转）
+- status.ts：会话状态面板构建（/fs 和 /fc 共用），含 context token、git 分支、Anthropic 配额
 - output.ts：stream-json 事件 → 飞书消息文本格式化
 - registry.ts：命名 session 注册表（register/lookup/list/remove，永久寻址）
 - discover.ts：扫描本地 Claude Code 对话（session 发现、slug→路径反推，作为注册表的补充）
 - recap.ts：上下文回顾（读取 session JSONL 提取最近对话，/fc 时自动发送）
 - feishu.ts：飞书 REST 轮询适配器（定时拉取群消息、发消息、资源下载）
+- wechat.ts：微信 ClawBot iLink 适配器（文本长轮询、发送、绑定）
 - poll-cursor.ts：轮询游标持久化（per-group 游标读写，原子文件操作）
 - file-staging.ts：文件暂存管理（inbox 目录、格式校验、TTL 清理、暂存队列）

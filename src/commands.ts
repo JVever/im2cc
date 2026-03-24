@@ -13,7 +13,9 @@ import { getDriver, hasDriver, type ToolId } from './tool-driver.js'
 import { handleStop, getQueueStatus } from './queue.js'
 import { discoverSessions, findSession } from './discover.js'
 import { register, lookup, search, listRegistered, touch, remove, updateRegistry } from './registry.js'
+import { buildSessionStatus } from './status.js'
 import { log } from './logger.js'
+import { isBestEffortTool, supportedToolChoices, supportedToolList } from './support-policy.js'
 
 export interface ParsedCommand {
   command: string
@@ -27,7 +29,6 @@ function resumeCommand(tool: ToolId, sessionId: string): string {
   switch (tool) {
     case 'claude': return `claude --resume ${sessionId}`
     case 'codex': return `codex resume ${sessionId}`
-    case 'kimi': return `kimi --session ${sessionId}`
     case 'gemini': return `gemini --resume ${sessionId}`
   }
 }
@@ -65,7 +66,7 @@ async function handleFn(args: string, conversationId: string, config: Im2ccConfi
     const projects = listProjects(config)
     if (projects.length === 0) return `${config.pathWhitelist.join(', ')} 下没有找到项目目录`
     const list = projects.map((p, i) => `  ${i + 1}. ${p}`).join('\n')
-    return `📁 可用项目:\n${list}\n\n用法: /fn <对话名称> [项目名] [--tool claude|codex|kimi|gemini]\n例如: /fn auth-refactor im2cc --tool codex`
+    return `📁 可用项目:\n${list}\n\n用法: /fn <对话名称> [项目名] [--tool ${supportedToolChoices()}]\n例如: /fn auth-refactor im2cc --tool codex\n\n正式支持: Claude Code / Codex\nGemini 为 best-effort`
   }
 
   const existing = getBinding(conversationId)
@@ -83,7 +84,7 @@ async function handleFn(args: string, conversationId: string, config: Im2ccConfi
   }
 
   const sessionName = argParts[0]
-  if (!sessionName) return '用法: /fn <对话名称> [项目名] [--tool claude|codex|kimi|gemini]'
+  if (!sessionName) return `用法: /fn <对话名称> [项目名] [--tool ${supportedToolChoices()}]`
   if (!isValidSessionName(sessionName)) {
     return `❌ 名称 "${sessionName}" 不合法\n只允许字母、数字、连字符和下划线`
   }
@@ -91,7 +92,7 @@ async function handleFn(args: string, conversationId: string, config: Im2ccConfi
 
   // 检查 driver 是否可用
   if (!hasDriver(tool)) {
-    return `❌ 工具 "${tool}" 未注册\n当前可用: claude, codex, kimi, gemini`
+    return `❌ 工具 "${tool}" 未注册\n当前可用: ${supportedToolList()}`
   }
   const driver = getDriver(tool)
   if (!driver.isAvailable()) {
@@ -111,14 +112,16 @@ async function handleFn(args: string, conversationId: string, config: Im2ccConfi
     register(sessionName, sessionId, validation.resolvedPath, tool)
 
     const binding = createBinding(conversationId, sessionId, validation.resolvedPath, config.defaultPermissionMode, cliVersion, transport, tool)
+    const supportNote = isBestEffortTool(tool) ? '\n⚠️ Gemini 为 best-effort 支持' : ''
 
     return [
       `✅ 新对话 "${sessionName}"${tool !== 'claude' ? ` [${tool}]` : ''}`,
       `📁 ${path.basename(validation.resolvedPath)}`,
       `⚙️ 模式: ${binding.permissionMode}`,
+      supportNote,
       '',
       `回到电脑: im2cc open ${sessionName}`,
-    ].join('\n')
+    ].filter(Boolean).join('\n')
   } catch (err) {
     return `❌ 创建失败: ${err instanceof Error ? err.message : String(err)}`
   }
@@ -212,12 +215,12 @@ async function listAvailableSessions(): Promise<string> {
 }
 
 /** 接入已注册对话 */
-function connectToRegistered(
+async function connectToRegistered(
   reg: { name: string; sessionId: string; cwd: string; permissionMode?: string; tool?: ToolId },
   conversationId: string,
   config: Im2ccConfig,
   transport: TransportType = 'feishu',
-): string {
+): Promise<string> {
   const tool = (reg.tool ?? 'claude') as ToolId
   const killed = getDriver(tool).killLocalSession(reg.name, tool)
   archiveBindingsBySession(reg.sessionId, conversationId)
@@ -228,28 +231,23 @@ function connectToRegistered(
   const binding = createBinding(conversationId, reg.sessionId, reg.cwd, mode, cliVersion, transport, tool)
   log(`[${conversationId}] attach → "${reg.name}" (${reg.sessionId})${killed ? ' [已关闭本地进程]' : ''}`)
 
+  const header = killed ? '已接入（已关闭电脑端）' : '已接入'
   const modeWarning = binding.permissionMode === 'YOLO'
-    ? '⚠️ 当前为 YOLO 模式（自动执行所有操作）\n   切换: /mode default'
-    : `⚙️ 模式: ${binding.permissionMode}`
+    ? '\n!! YOLO 模式 — 自动执行所有操作，/mode default 切换'
+    : ''
 
-  return [
-    `✅ 已接入 "${reg.name}"`,
-    killed ? '🔄 已关闭电脑端的对话' : '',
-    `📁 ${path.basename(reg.cwd)}`,
-    modeWarning,
-    '',
-    `回到电脑: im2cc open ${reg.name}`,
-  ].filter(Boolean).join('\n')
+  const status = await buildSessionStatus(binding)
+  return `${header}${modeWarning}\n${status}`
 }
 
 /** 接入通过文件系统发现的对话（自动注册） */
-function connectToDiscovered(
+async function connectToDiscovered(
   name: string,
   session: { sessionId: string; name: string; projectPath: string; projectName: string },
   conversationId: string,
   config: Im2ccConfig,
   transport: TransportType = 'feishu',
-): string {
+): Promise<string> {
   const driver = getDriver('claude')  // discovered sessions 目前只支持 claude
   const cliVersion = driver.getVersion()
   archiveBindingsBySession(session.sessionId, conversationId)
@@ -258,16 +256,11 @@ function connectToDiscovered(
   log(`[${conversationId}] attach (discovered) → "${name}" (${session.sessionId})`)
 
   const modeWarning = binding.permissionMode === 'YOLO'
-    ? '⚠️ 当前为 YOLO 模式（自动执行所有操作）\n   切换: /mode default'
-    : `⚙️ 模式: ${binding.permissionMode}`
+    ? '\n!! YOLO 模式 — 自动执行所有操作，/mode default 切换'
+    : ''
 
-  return [
-    `✅ 已接入 "${session.name || name}"`,
-    `📁 ${session.projectName}`,
-    modeWarning,
-    '',
-    `回到电脑: im2cc open ${name}`,
-  ].join('\n')
+  const status = await buildSessionStatus(binding)
+  return `已接入${modeWarning}\n${status}`
 }
 
 /** /fc <新名称> <session-query> — 注册未注册对话并接入 */
@@ -397,28 +390,10 @@ function handleFk(args: string, conversationId: string): string {
 }
 
 
-function handleFs(conversationId: string): string {
+async function handleFs(conversationId: string): Promise<string> {
   const binding = getBinding(conversationId)
   if (!binding) return '该群未绑定任何 session'
-
-  const qs = getQueueStatus(conversationId)
-  const projectName = path.basename(binding.cwd)
-
-  // 查找注册名称，给出正确的 fc 提示
-  const regEntry = listRegistered().find(r => r.sessionId === binding.sessionId)
-  const sessionName = regEntry?.name ?? '(未注册)'
-  const toolTag = regEntry?.tool && regEntry.tool !== 'claude' ? ` [${regEntry.tool}]` : ''
-  const hint = regEntry ? `fc ${regEntry.name}` : `fc <名称>`
-
-  return [
-    `📊 ${sessionName}${toolTag} — ${projectName}`,
-    `  目录: ${binding.cwd}`,
-    `  模式: ${binding.permissionMode.toUpperCase()}`,
-    `  轮次: ${binding.turnCount}`,
-    `  状态: ${qs.state}${qs.queueLength > 0 ? ` (队列 ${qs.queueLength})` : ''}`,
-    '',
-    `  回到电脑: ${hint}`,
-  ].join('\n')
+  return buildSessionStatus(binding)
 }
 
 function handleHelp(): string {
