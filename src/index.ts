@@ -458,7 +458,7 @@ export async function startDaemon(): Promise<void> {
         const tool = binding.tool ?? reg?.tool ?? 'claude'
         const toolLabel = tool === 'claude' ? 'Claude Code' : tool.charAt(0).toUpperCase() + tool.slice(1)
         await sendToConversation('feishu', binding.conversationId,
-          `🔄 im2cc 已重启\n📌 ${name} · ${toolLabel}\n📁 ${path.basename(binding.cwd)}\n⚙️ 模式: ${binding.permissionMode}`)
+          `im2cc 已重启\n${name}  ·  ${toolLabel}\n${binding.cwd}\n${binding.permissionMode}`)
       } catch { /* 群可能已被删除 */ }
     }
   }

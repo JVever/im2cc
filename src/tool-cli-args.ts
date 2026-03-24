@@ -11,6 +11,7 @@ export function resumeCommand(tool: ToolId, sessionId: string): string {
     case 'claude': return `claude --resume ${sessionId}`
     case 'codex': return `codex resume ${sessionId}`
     case 'gemini': return `gemini --resume ${sessionId}`
+    default: return `${tool} --resume ${sessionId}`
   }
 }
 

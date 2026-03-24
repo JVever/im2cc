@@ -15,6 +15,7 @@ import { getClaudeVersion } from '../src/claude-driver.js'
 import { register, lookup, listRegistered, remove } from '../src/registry.js'
 import { expandPath, validatePath, isValidSessionName } from '../src/security.js'
 import { getDriver, hasDriver, type ToolId } from '../src/tool-driver.js'
+import { resumeCommand, toolCreateArgs, toolResumeArgs } from '../src/tool-cli-args.js'
 import { findSession } from '../src/discover.js'
 import { DAEMON_LOCK_STARTUP_GRACE_MS, daemonMainModulePath, isIm2ccDaemonProcess, killAllDaemonProcesses, listDaemonProcessPids, readDaemonPidRecord } from '../src/daemon-process.js'
 import readline from 'node:readline'
@@ -26,15 +27,6 @@ import '../src/kimi-driver.js'
 import '../src/gemini-driver.js'
 
 const command = process.argv[2]
-
-function resumeCommand(tool: ToolId, sessionId: string): string {
-  switch (tool) {
-    case 'claude': return `claude --resume ${sessionId}`
-    case 'codex': return `codex resume ${sessionId}`
-    case 'kimi': return `kimi --session ${sessionId}`
-    case 'gemini': return `gemini --resume ${sessionId}`
-  }
-}
 
 type DaemonState =
   | { kind: 'running', pids: number[] }
@@ -192,37 +184,6 @@ function findTmuxSession(name: string, tool: string = 'claude'): string | null {
 
   // 工具不匹配或无法检测 → 不接入，让调用方重新创建正确的 session
   return null
-}
-
-// ─── 工具 → tmux 交互式命令映射 ─────────────────────
-
-/** 生成创建 session 的 tmux 命令参数（交互模式） */
-/**
- * 工具创建 session 的交互式 CLI 参数（用于 tmux，保持打开等用户输入）。
- * 注意：与 driver 的 createSession（headless 非交互模式）不同！
- */
-function toolCreateArgs(tool: ToolId, sessionId: string, name: string): string[] {
-  switch (tool) {
-    case 'claude': return ['claude', '--session-id', sessionId, '--dangerously-skip-permissions', '--name', `im2cc:${name}`]
-    case 'codex':  return ['codex', '--skip-git-repo-check']
-    case 'kimi':   return ['kimi']    // 交互模式
-    case 'gemini': return ['gemini']  // 交互模式
-    default:       return [tool]
-  }
-}
-
-/**
- * 工具恢复 session 的交互式 CLI 参数（用于 tmux）。
- * Claude 支持精确 --resume <id>，其他工具用各自的 resume 方式。
- */
-function toolResumeArgs(tool: ToolId, sessionId: string, name: string): string[] {
-  switch (tool) {
-    case 'claude': return ['claude', '--resume', sessionId, '--dangerously-skip-permissions', '--name', `im2cc:${name}`]
-    case 'codex':  return ['codex', '--skip-git-repo-check', 'resume', sessionId]
-    case 'kimi':   return ['kimi', '--session', sessionId]   // 恢复指定 session
-    case 'gemini': return ['gemini', '--resume', sessionId]  // 恢复指定 session
-    default:       return [tool, '--resume', sessionId]
-  }
 }
 
 // ─── 远程绑定解除 ───────────────────────────────────

@@ -25,6 +25,8 @@ export function toolDisplayName(tool: ToolId): string {
       return 'Codex'
     case 'gemini':
       return 'Gemini'
+    default:
+      return tool
   }
 }
 

@@ -16,6 +16,7 @@ import { register, lookup, search, listRegistered, touch, remove, updateRegistry
 import { buildSessionStatus } from './status.js'
 import { log } from './logger.js'
 import { isBestEffortTool, supportedToolChoices, supportedToolList } from './support-policy.js'
+import { resumeCommand } from './tool-cli-args.js'
 
 export interface ParsedCommand {
   command: string
@@ -24,14 +25,6 @@ export interface ParsedCommand {
 
 // 统一命令名：电脑端和飞书端完全一致
 const COMMANDS = new Set(['fn', 'fc', 'fl', 'fk', 'fs', 'fd', 'mode', 'stop', 'help'])
-
-function resumeCommand(tool: ToolId, sessionId: string): string {
-  switch (tool) {
-    case 'claude': return `claude --resume ${sessionId}`
-    case 'codex': return `codex resume ${sessionId}`
-    case 'gemini': return `gemini --resume ${sessionId}`
-  }
-}
 
 export function parseCommand(text: string): ParsedCommand | null {
   const trimmed = text.trim()

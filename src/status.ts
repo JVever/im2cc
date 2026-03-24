@@ -1,6 +1,6 @@
 /**
- * @input:    Binding, RegisteredSession, Claude session JSONL, macOS Keychain (OAuth token), git
- * @output:   buildSessionStatus() — 构建富文本会话状态面板（/fs 和 /fc 共用）
+ * @input:    Binding, RegisteredSession, Claude/Codex session files, macOS Keychain (OAuth), git
+ * @output:   buildSessionStatus() — 构建会话状态面板（/fs 和 /fc 共用）
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -9,16 +9,13 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import type { Binding } from './session.js'
-import type { RegisteredSession } from './registry.js'
 import { listRegistered } from './registry.js'
 import { getQueueStatus } from './queue.js'
 import { pathToSlug } from './discover.js'
 import { log } from './logger.js'
-import { isBestEffortTool, toolDisplayName } from './support-policy.js'
 
 // ── Formatting helpers ─────────────────────────────────────────
 
-/** 格式化 token 数量: 1234 → "1.2K", 456789 → "457K", 1234567 → "1.2M" */
 function formatTokens(n: number): string {
   if (n < 1000) return String(n)
   if (n < 10_000) return (n / 1000).toFixed(1) + 'K'
@@ -27,7 +24,6 @@ function formatTokens(n: number): string {
   return Math.round(n / 1_000_000) + 'M'
 }
 
-/** 相对时间: "刚刚", "3分钟前", "2小时前", "昨天", "3天前" */
 function relativeTime(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime()
   if (diff < 0) return '刚刚'
@@ -43,7 +39,6 @@ function relativeTime(iso: string): string {
   return `${Math.floor(days / 30)}个月前`
 }
 
-/** 队列状态中文 */
 function queueStateCN(state: string): string {
   switch (state) {
     case 'idle': return '空闲'
@@ -53,13 +48,46 @@ function queueStateCN(state: string): string {
   }
 }
 
-/** 工具 ID → 显示名 */
 function toolLabel(tool: string): string {
-  if (tool === 'claude' || tool === 'codex' || tool === 'gemini') {
-    return toolDisplayName(tool) + (isBestEffortTool(tool) ? ' (best-effort)' : '')
+  switch (tool) {
+    case 'claude': return 'Claude Code'
+    case 'codex': return 'Codex'
+    case 'kimi': return 'Kimi Code'
+    case 'gemini': return 'Gemini'
+    case 'cline': return 'Cline'
+    default: return tool
   }
-  if (tool === 'cline') return 'Cline'
-  return tool
+}
+
+function shortModelName(model: string): string {
+  return model
+    .replace(/^claude-/, '')
+    .replace(/-\d{8}$/, '')  // strip date suffix
+}
+
+/** 格式化重置时间：始终精确到小时分钟 */
+function formatResetTime(resetTime: Date | string | number): string {
+  try {
+    const reset = typeof resetTime === 'number'
+      ? new Date(resetTime * 1000)  // Unix seconds
+      : new Date(resetTime)
+    const now = new Date()
+    const diffMs = reset.getTime() - now.getTime()
+    if (diffMs <= 0) return '即将重置'
+    const totalMin = Math.floor(diffMs / 60000)
+    const hours = Math.floor(totalMin / 60)
+    const mins = totalMin % 60
+    if (hours === 0) return `${mins}分钟后重置`
+    if (mins === 0) return `${hours}小时后重置`
+    return `${hours}小时${mins}分钟后重置`
+  } catch {
+    return ''
+  }
+}
+
+function progressBar(percent: number, width: number = 10): string {
+  const filled = Math.round((percent / 100) * width)
+  return '█'.repeat(filled) + '░'.repeat(width - filled)
 }
 
 // ── Git branch ─────────────────────────────────────────────────
@@ -67,29 +95,29 @@ function toolLabel(tool: string): string {
 function getGitBranch(cwd: string): string | null {
   try {
     return execFileSync('git', ['-C', cwd, 'branch', '--show-current'], {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'ignore'],
-      timeout: 3000,
+      encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'], timeout: 3000,
     }).trim() || null
-  } catch {
-    return null
-  }
+  } catch { return null }
 }
 
-// ── Context tokens from Claude session JSONL ───────────────────
+// ── 统一的上下文 + 配额数据结构 ──────────────────────────────
 
 interface ContextInfo {
   inputTokens: number
   outputTokens: number
-  cacheRead: number
-  cacheCreation: number
+  cacheTokens: number  // cacheRead + cacheCreation (Claude) or cached_input (Codex)
   model: string
 }
 
-/**
- * 从 Claude session JSONL 末尾提取最近一条 assistant message 的 usage 和 model。
- * 只读文件尾部（最多 200KB），避免读取大文件。
- */
+interface QuotaInfo {
+  fiveHourPercent: number
+  fiveHourResetAt: Date | string | number
+  weeklyPercent: number
+  weeklyResetAt: Date | string | number
+}
+
+// ── Claude: context from session JSONL ────────────────────────
+
 function getClaudeContextInfo(sessionId: string, cwd: string): ContextInfo | null {
   try {
     const slug = pathToSlug(cwd)
@@ -97,235 +125,262 @@ function getClaudeContextInfo(sessionId: string, cwd: string): ContextInfo | nul
     if (!fs.existsSync(jsonlPath)) return null
 
     const stat = fs.statSync(jsonlPath)
-    const TAIL_SIZE = 200 * 1024 // 200KB from end
+    const TAIL_SIZE = 200 * 1024
     const start = Math.max(0, stat.size - TAIL_SIZE)
-
     const fd = fs.openSync(jsonlPath, 'r')
     const buf = Buffer.alloc(Math.min(TAIL_SIZE, stat.size))
     fs.readSync(fd, buf, 0, buf.length, start)
     fs.closeSync(fd)
 
-    const tail = buf.toString('utf-8')
-    const lines = tail.split('\n')
-
-    // Walk backwards to find the last assistant/message event with usage
+    const lines = buf.toString('utf-8').split('\n')
     for (let i = lines.length - 1; i >= 0; i--) {
       const line = lines[i].trim()
-      if (!line) continue
-      // Quick string filter before parsing
-      if (!line.includes('"usage"')) continue
-
+      if (!line || !line.includes('"usage"')) continue
       try {
         const obj = JSON.parse(line) as Record<string, unknown>
         if (obj.type !== 'assistant') continue
         const msg = obj.message as Record<string, unknown> | undefined
         if (!msg?.usage) continue
-        const usage = msg.usage as Record<string, number>
-        const model = (msg.model ?? '') as string
+        const u = msg.usage as Record<string, number>
         return {
-          inputTokens: usage.input_tokens ?? 0,
-          outputTokens: usage.output_tokens ?? 0,
-          cacheRead: usage.cache_read_input_tokens ?? 0,
-          cacheCreation: usage.cache_creation_input_tokens ?? 0,
-          model,
+          inputTokens: u.input_tokens ?? 0,
+          outputTokens: u.output_tokens ?? 0,
+          cacheTokens: (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0),
+          model: (msg.model ?? '') as string,
         }
-      } catch { /* skip malformed lines */ }
+      } catch { /* skip */ }
     }
-  } catch (err) {
-    log(`[status] 读取 context info 失败: ${err}`)
-  }
+  } catch (err) { log(`[status] Claude context 读取失败: ${err}`) }
   return null
 }
 
-// ── Anthropic OAuth quota ──────────────────────────────────────
+// ── Claude: quota from HUD cache → API fallback ──────────────
 
-interface QuotaInfo {
-  fiveHourPercent: number
-  fiveHourResetAt: string
-  dailyPercent: number
-  dailyResetAt: string
-}
-
-/** 从 macOS Keychain 读取 Claude Code OAuth token */
 function readOAuthToken(): string | null {
+  if (process.platform !== 'darwin') return null
   try {
     const raw = execFileSync('/usr/bin/security', [
       'find-generic-password', '-s', 'Claude Code-credentials', '-w',
-    ], {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'ignore'],
-      timeout: 5000,
-    }).trim()
+    ], { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'], timeout: 5000 }).trim()
     if (!raw) return null
-    // Token could be a JSON object containing access_token
     try {
-      const parsed = JSON.parse(raw) as Record<string, unknown>
-      if (typeof parsed.access_token === 'string') return parsed.access_token
-    } catch { /* not JSON, might be the token itself */ }
+      const parsed = JSON.parse(raw) as Record<string, Record<string, unknown>>
+      const token = parsed.claudeAiOauth?.accessToken as string | undefined
+      if (token) return token
+    } catch { /* not JSON */ }
     return raw
-  } catch {
-    return null
-  }
+  } catch { return null }
 }
 
-/** 调用 Anthropic OAuth usage API 获取配额 */
-async function fetchQuota(): Promise<QuotaInfo | null> {
+function readHudCache(): QuotaInfo | null {
+  try {
+    const cachePath = path.join(os.homedir(), '.claude', 'plugins', 'claude-hud', '.usage-cache.json')
+    if (!fs.existsSync(cachePath)) return null
+    const raw = JSON.parse(fs.readFileSync(cachePath, 'utf-8')) as {
+      data: { fiveHour?: number; sevenDay?: number; fiveHourResetAt?: string; sevenDayResetAt?: string }
+      timestamp: number
+    }
+    if (Date.now() - raw.timestamp > 120_000) return null
+    const d = raw.data
+    return {
+      fiveHourPercent: d.fiveHour ?? 0,
+      fiveHourResetAt: d.fiveHourResetAt ?? '',
+      weeklyPercent: d.sevenDay ?? 0,
+      weeklyResetAt: d.sevenDayResetAt ?? '',
+    }
+  } catch { return null }
+}
+
+async function fetchClaudeQuota(): Promise<QuotaInfo | null> {
+  const cached = readHudCache()
+  if (cached) return cached
+
   const token = readOAuthToken()
   if (!token) return null
-
   try {
     const resp = await fetch('https://api.anthropic.com/api/oauth/usage', {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'anthropic-beta': 'oauth-2025-04-20',
-      },
+      headers: { 'Authorization': `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20', 'User-Agent': 'im2cc/1.0' },
       signal: AbortSignal.timeout(8000),
     })
     if (!resp.ok) return null
-    const data = await resp.json() as Record<string, unknown>
-
-    // API 返回结构:
-    // { daily: { limit, used, reset_at }, bonus: { limit, used, reset_at } }
-    // 或 { five_hour: { ... }, weekly: { ... } }
-    // 兼容两种格式
-    const extract = (section: Record<string, unknown> | undefined): { percent: number; resetAt: string } | null => {
-      if (!section) return null
-      const limit = Number(section.limit ?? 0)
-      const used = Number(section.used ?? 0)
-      const resetAt = String(section.reset_at ?? section.resetAt ?? '')
-      if (limit <= 0) return null
-      return { percent: Math.round((used / limit) * 100), resetAt }
-    }
-
-    const d = data as Record<string, Record<string, unknown>>
-    const fiveHour = extract(d.five_hour ?? d.fiveHour)
-    const daily = extract(d.daily ?? d.weekly)
-
-    if (!fiveHour && !daily) return null
-
+    const data = await resp.json() as Record<string, Record<string, unknown>>
+    const fh = data.five_hour, wk = data.seven_day
     return {
-      fiveHourPercent: fiveHour?.percent ?? 0,
-      fiveHourResetAt: fiveHour?.resetAt ?? '',
-      dailyPercent: daily?.percent ?? 0,
-      dailyResetAt: daily?.resetAt ?? '',
+      fiveHourPercent: Math.round(Number(fh?.utilization ?? 0)),
+      fiveHourResetAt: String(fh?.resets_at ?? ''),
+      weeklyPercent: Math.round(Number(wk?.utilization ?? 0)),
+      weeklyResetAt: String(wk?.resets_at ?? ''),
     }
-  } catch (err) {
-    log(`[status] quota API 失败: ${err}`)
-    return null
-  }
+  } catch (err) { log(`[status] Claude quota API 失败: ${err}`); return null }
+}
+
+// ── Codex: context + quota from session JSONL ────────────────
+
+function findCodexSessionFile(threadId: string): string | null {
+  const sessDir = path.join(os.homedir(), '.codex', 'sessions')
+  if (!fs.existsSync(sessDir)) return null
+  try {
+    // 递归搜索包含 threadId 的文件
+    const result = execFileSync('find', [sessDir, '-name', `*${threadId}*`, '-type', 'f'],
+      { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'], timeout: 3000 }).trim()
+    const files = result.split('\n').filter(Boolean)
+    // 多个 rollout 文件时取最新的
+    return files.length > 0 ? files.sort().pop()! : null
+  } catch { return null }
+}
+
+interface CodexSessionData {
+  context: ContextInfo | null
+  quota: QuotaInfo | null
+}
+
+function getCodexSessionData(threadId: string): CodexSessionData {
+  const result: CodexSessionData = { context: null, quota: null }
+  const file = findCodexSessionFile(threadId)
+  if (!file) return result
+
+  try {
+    const stat = fs.statSync(file)
+    const TAIL_SIZE = 100 * 1024
+    const start = Math.max(0, stat.size - TAIL_SIZE)
+    const fd = fs.openSync(file, 'r')
+    const buf = Buffer.alloc(Math.min(TAIL_SIZE, stat.size))
+    fs.readSync(fd, buf, 0, buf.length, start)
+    fs.closeSync(fd)
+
+    const lines = buf.toString('utf-8').split('\n')
+
+    // 从末尾找最后一条 token_count 事件
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim()
+      if (!line || !line.includes('token_count')) continue
+      try {
+        const obj = JSON.parse(line) as Record<string, unknown>
+        const payload = obj.payload as Record<string, unknown> | undefined
+        if (!payload || payload.type !== 'token_count') continue
+
+        // 提取 token 使用量
+        const info = payload.info as Record<string, Record<string, number>> | null
+        if (info?.total_token_usage && !result.context) {
+          const u = info.total_token_usage
+          result.context = {
+            inputTokens: u.input_tokens ?? 0,
+            outputTokens: u.output_tokens ?? 0,
+            cacheTokens: u.cached_input_tokens ?? 0,
+            model: getCodexModel(),
+          }
+        }
+
+        // 提取配额（rate_limits）
+        const rl = payload.rate_limits as Record<string, Record<string, unknown>> | undefined
+        if (rl && !result.quota) {
+          const pri = rl.primary, sec = rl.secondary
+          result.quota = {
+            fiveHourPercent: Math.round(Number(pri?.used_percent ?? 0)),
+            fiveHourResetAt: Number(pri?.resets_at ?? 0),
+            weeklyPercent: Math.round(Number(sec?.used_percent ?? 0)),
+            weeklyResetAt: Number(sec?.resets_at ?? 0),
+          }
+        }
+
+        if (result.context && result.quota) break
+      } catch { /* skip */ }
+    }
+  } catch (err) { log(`[status] Codex session 读取失败: ${err}`) }
+  return result
+}
+
+function getCodexModel(): string {
+  try {
+    const configPath = path.join(os.homedir(), '.codex', 'config.toml')
+    if (!fs.existsSync(configPath)) return ''
+    const content = fs.readFileSync(configPath, 'utf-8')
+    const match = content.match(/^model\s*=\s*"(.+?)"/m)
+    return match?.[1] ?? ''
+  } catch { return '' }
 }
 
 // ── Main status builder ────────────────────────────────────────
 
 export interface StatusOptions {
-  /** 是否获取配额（异步 HTTP，/fs 时启用，/fc 时也启用） */
   includeQuota?: boolean
 }
 
-/**
- * 构建富文本会话状态面板。
- * 共用于 /fs 和 /fc 连接成功后。
- */
 export async function buildSessionStatus(
   binding: Binding,
   opts: StatusOptions = {},
 ): Promise<string> {
   const { includeQuota = true } = opts
 
-  // 基础信息
   const regEntry = listRegistered().find(r => r.sessionId === binding.sessionId)
   const sessionName = regEntry?.name ?? '(未注册)'
   const tool = regEntry?.tool ?? binding.tool ?? 'claude'
-  const projectName = path.basename(binding.cwd)
   const qs = getQueueStatus(binding.conversationId)
-
-  // 并行获取可选数据
   const gitBranch = getGitBranch(binding.cwd)
-  const contextInfo = tool === 'claude'
-    ? getClaudeContextInfo(binding.sessionId, binding.cwd)
-    : null
 
-  const quotaPromise = includeQuota ? fetchQuota() : Promise.resolve(null)
-  const quota = await quotaPromise
+  // 根据工具类型获取上下文和配额数据
+  let contextInfo: ContextInfo | null = null
+  let quota: QuotaInfo | null = null
 
-  // ── Build output ──
+  if (tool === 'claude') {
+    contextInfo = getClaudeContextInfo(binding.sessionId, binding.cwd)
+    if (includeQuota) quota = await fetchClaudeQuota()
+  } else if (tool === 'codex') {
+    const codexData = getCodexSessionData(binding.sessionId)
+    contextInfo = codexData.context
+    quota = codexData.quota
+  }
 
+  // ── Build card ──
+
+  const SEP = '─────────────────────────────'
   const lines: string[] = []
 
-  // Header
-  lines.push(`┌─ ${sessionName} ─────────────────────`)
-  lines.push(`│`)
+  // ❶ 标题
+  lines.push(sessionName)
+  lines.push(SEP)
 
-  // Session info
-  lines.push(`│  工具      ${toolLabel(tool)}`)
-  lines.push(`│  项目      ${projectName}`)
-  lines.push(`│  目录      ${binding.cwd}`)
-  if (gitBranch) {
-    lines.push(`│  分支      ${gitBranch}`)
-  }
+  // ❷ 身份行
+  const identity = [toolLabel(tool), path.basename(binding.cwd)]
+  if (gitBranch) identity.push(gitBranch)
+  lines.push(identity.join('  ·  '))
 
-  lines.push(`│`)
+  // ❸ 路径
+  lines.push(binding.cwd)
 
-  // Runtime status
-  lines.push(`│  模式      ${binding.permissionMode}`)
-  lines.push(`│  轮次      ${binding.turnCount}`)
-
+  // ❹ 运行时
   const stateStr = queueStateCN(qs.state)
-  const queueSuffix = qs.queueLength > 0 ? ` (队列 ${qs.queueLength})` : ''
-  lines.push(`│  状态      ${stateStr}${queueSuffix}`)
+  const queueSuffix = qs.queueLength > 0 ? `(队列 ${qs.queueLength})` : ''
+  lines.push(`${binding.permissionMode}  ·  ${binding.turnCount}轮  ·  ${stateStr}${queueSuffix}`)
 
-  // Context tokens (Claude only)
+  // ❺ 上下文 & 模型
   if (contextInfo) {
-    const totalInput = contextInfo.inputTokens + contextInfo.cacheRead + contextInfo.cacheCreation
-    const totalAll = totalInput + contextInfo.outputTokens
-    lines.push(`│`)
-    lines.push(`│  上下文    ${formatTokens(totalAll)} tokens`)
-    if (contextInfo.cacheRead > 0) {
-      lines.push(`│    输入    ${formatTokens(contextInfo.inputTokens)}  缓存 ${formatTokens(contextInfo.cacheRead)}`)
-    }
-    lines.push(`│    输出    ${formatTokens(contextInfo.outputTokens)}`)
-    if (contextInfo.model) {
-      lines.push(`│  模型      ${contextInfo.model}`)
-    }
+    lines.push(SEP)
+    const totalInput = contextInfo.inputTokens + contextInfo.cacheTokens
+    const model = contextInfo.model ? shortModelName(contextInfo.model) : ''
+    lines.push(`上下文 ${formatTokens(totalInput)}${model ? `  ·  ${model}` : ''}`)
+
+    const details: string[] = []
+    if (contextInfo.cacheTokens > 0) details.push(`缓存 ${formatTokens(contextInfo.cacheTokens)}`)
+    if (contextInfo.inputTokens > 0) details.push(`新增 ${formatTokens(contextInfo.inputTokens)}`)
+    details.push(`输出 ${formatTokens(contextInfo.outputTokens)}`)
+    lines.push(details.join('  ·  '))
   }
 
-  // Quota
+  // ❻ 配额
   if (quota) {
-    lines.push(`│`)
-    const fiveHourReset = quota.fiveHourResetAt ? ` (${formatResetTime(quota.fiveHourResetAt)})` : ''
-    const dailyReset = quota.dailyResetAt ? ` (${formatResetTime(quota.dailyResetAt)})` : ''
-    lines.push(`│  5h 配额   ${quota.fiveHourPercent}%${fiveHourReset}`)
-    lines.push(`│  日配额    ${quota.dailyPercent}%${dailyReset}`)
+    lines.push(SEP)
+    const fhReset = quota.fiveHourResetAt ? formatResetTime(quota.fiveHourResetAt) : ''
+    const wkReset = quota.weeklyResetAt ? formatResetTime(quota.weeklyResetAt) : ''
+    lines.push(`5h ${progressBar(quota.fiveHourPercent)} ${quota.fiveHourPercent}%${fhReset ? `  ${fhReset}` : ''}`)
+    lines.push(`周  ${progressBar(quota.weeklyPercent)} ${quota.weeklyPercent}%${wkReset ? `  ${wkReset}` : ''}`)
   }
 
-  // Last active
-  lines.push(`│`)
-  lines.push(`│  活跃      ${relativeTime(binding.lastActiveAt)}`)
-
-  // Footer
-  const hint = regEntry ? `im2cc open ${regEntry.name}` : 'fc <名称>'
-  lines.push(`│`)
-  lines.push(`│  回到电脑  ${hint}`)
-  lines.push(`└──────────────────────────────────`)
+  // ❼ 底部
+  lines.push(SEP)
+  const active = relativeTime(binding.lastActiveAt)
+  const hint = regEntry ? `fc ${regEntry.name}` : 'fc <名称>'
+  lines.push(`${active}  ·  回到电脑: ${hint}`)
 
   return lines.join('\n')
-}
-
-/** 格式化配额重置时间为简洁中文 */
-function formatResetTime(iso: string): string {
-  if (!iso) return ''
-  try {
-    const reset = new Date(iso)
-    const now = new Date()
-    const diffMs = reset.getTime() - now.getTime()
-    if (diffMs <= 0) return '即将重置'
-    const minutes = Math.floor(diffMs / 60000)
-    if (minutes < 60) return `${minutes}分后重置`
-    const hours = Math.floor(minutes / 60)
-    const remainMin = minutes % 60
-    if (remainMin === 0) return `${hours}h后重置`
-    return `${hours}h${remainMin}m后重置`
-  } catch {
-    return ''
-  }
 }
