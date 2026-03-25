@@ -29,8 +29,8 @@ test('Codex builtin default is bypass', () => {
   assert.equal(mp.getBuiltinDefault('codex'), 'bypass')
 })
 
-test('Claude builtin default is bypassPermissions', () => {
-  assert.equal(mp.getBuiltinDefault('claude'), 'bypassPermissions')
+test('Claude builtin default is auto', () => {
+  assert.equal(mp.getBuiltinDefault('claude'), 'auto')
 })
 
 test('legacy YOLO migrates to each tool builtin default', () => {

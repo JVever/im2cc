@@ -114,7 +114,7 @@ const registry: Record<string, ModeInfo[]> = {
 
 /** 内置默认模式（IM 远程控制场景，需要全自动） */
 const builtinDefaults: Record<string, string> = {
-  claude: 'bypassPermissions',
+  claude: 'auto',
   codex: 'bypass',
   gemini: 'yolo',
 }
@@ -153,8 +153,11 @@ export function migrateLegacyMode(legacyMode: string, tool: ToolId): string {
 
   switch (legacyMode) {
     case 'YOLO':
-    case 'dangerouslySkipPermissions':
-      return getBuiltinDefault(tool)  // 各工具的"最高权限"模式
+    case 'dangerouslySkipPermissions': {
+      // YOLO 语义是"跳过所有检查"，映射到各工具的最高权限模式（非默认模式）
+      const maxPerms: Record<string, string> = { claude: 'bypassPermissions', codex: 'bypass', gemini: 'yolo' }
+      return maxPerms[tool] ?? getBuiltinDefault(tool)
+    }
     case 'auto-edit':
       switch (tool) {
         case 'claude': return 'acceptEdits'
