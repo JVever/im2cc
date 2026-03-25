@@ -11,7 +11,7 @@ import { validatePath, resolvePath, listProjects, isValidSessionName } from './s
 import { createBinding, getBinding, archiveBinding, archiveBindingsBySession, updateBinding } from './session.js'
 import { getDriver, hasDriver, type ToolId } from './tool-driver.js'
 import { handleStop, getQueueStatus } from './queue.js'
-import { discoverSessions, findSession } from './discover.js'
+import { discoverSessions, findSession, syncDriftedSession } from './discover.js'
 import { register, lookup, search, listRegistered, touch, remove, updateRegistry } from './registry.js'
 import { buildSessionStatus } from './status.js'
 import { log } from './logger.js'
@@ -216,6 +216,18 @@ async function connectToRegistered(
   transport: TransportType = 'feishu',
 ): Promise<string> {
   const tool = (reg.tool ?? 'claude') as ToolId
+
+  // 断开前同步：在 killLocalSession 之前检查 session 是否漂移
+  if (tool === 'claude') {
+    const allNames = listRegistered()
+    const synced = syncDriftedSession(reg.name, reg.sessionId, reg.cwd, allNames)
+    if (synced) {
+      log(`[${conversationId}] pre-disconnect sync: ${reg.name} ${reg.sessionId.slice(0, 8)} → ${synced.slice(0, 8)}`)
+      register(reg.name, synced, reg.cwd, 'claude')
+      reg = { ...reg, sessionId: synced }
+    }
+  }
+
   const killed = getDriver(tool).killLocalSession(reg.name, tool)
   archiveBindingsBySession(reg.sessionId, conversationId)
   const driver = getDriver(tool)

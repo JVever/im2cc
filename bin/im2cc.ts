@@ -16,7 +16,7 @@ import { register, lookup, listRegistered, remove } from '../src/registry.js'
 import { expandPath, validatePath, isValidSessionName } from '../src/security.js'
 import { getDriver, hasDriver, type ToolId } from '../src/tool-driver.js'
 import { resumeCommand, toolCreateArgs, toolResumeArgs } from '../src/tool-cli-args.js'
-import { findSession } from '../src/discover.js'
+import { findSession, syncDriftedSession } from '../src/discover.js'
 import { DAEMON_LOCK_STARTUP_GRACE_MS, daemonMainModulePath, isIm2ccDaemonProcess, killAllDaemonProcesses, listDaemonProcessPids, readDaemonPidRecord } from '../src/daemon-process.js'
 import readline from 'node:readline'
 
@@ -472,7 +472,7 @@ async function cmdConnect(): Promise<void> {
   }
 
   // 单参数模式: connect <名称>
-  const session = lookup(target)
+  let session = lookup(target)
   if (!session) {
     console.log(`未找到 "${target}"`)
     const all = listRegistered()
@@ -483,7 +483,18 @@ async function cmdConnect(): Promise<void> {
     return
   }
 
-  const tool = session.tool ?? 'claude'
+  let tool = session.tool ?? 'claude'
+
+  // 断开前同步：检查 session 是否漂移（Plan 模式等）
+  if (tool === 'claude') {
+    const allNames = listRegistered()
+    const synced = syncDriftedSession(session.name, session.sessionId, session.cwd, allNames)
+    if (synced) {
+      console.log(`🔄 检测到 session 漂移，已自动同步: ${session.sessionId.slice(0, 8)} → ${synced.slice(0, 8)}`)
+      register(session.name, synced, session.cwd, 'claude')
+      session = { ...session, sessionId: synced }
+    }
+  }
 
   // 独占：解绑远程端
   await releaseRemoteBinding(session.sessionId, session.name)

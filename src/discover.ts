@@ -1,6 +1,6 @@
 /**
  * @input:    ~/.claude/projects/ 下的 session JSONL 文件
- * @output:   discoverSessions(), pathToSlug() — 扫描本地 Claude Code 对话列表 + 路径转 slug
+ * @output:   discoverSessions(), pathToSlug(), syncDriftedSession() — 扫描本地对话 + 路径转 slug + 断开前漂移同步
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -8,6 +8,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import readline from 'node:readline'
+import { log } from './logger.js'
 
 export interface DiscoveredSession {
   sessionId: string
@@ -221,4 +222,78 @@ export async function findSession(
     s.name.toLowerCase().includes(q) ||
     s.projectName.toLowerCase().includes(q)
   )
+}
+
+/**
+ * 断开前同步：检查 tmux 中实际运行的 session 是否与 registry 一致。
+ * 如果发现漂移（Plan 模式等），自动更新 registry 并返回新 sessionId。
+ * 返回 null 表示无漂移或无法确定归属。
+ */
+export function syncDriftedSession(
+  name: string,
+  registeredSessionId: string,
+  cwd: string,
+  activeNames: { name: string; sessionId: string; cwd: string; tool?: string }[],
+): string | null {
+  const slug = pathToSlug(cwd)
+  const slugDir = path.join(os.homedir(), '.claude', 'projects', slug)
+
+  if (!fs.existsSync(slugDir)) return null
+
+  // 扫描 slug 目录下的 .jsonl 文件，按 mtime 排序
+  let files: { sessionId: string; mtime: number }[]
+  try {
+    files = fs.readdirSync(slugDir)
+      .filter(f => f.endsWith('.jsonl'))
+      .map(f => {
+        const stat = fs.statSync(path.join(slugDir, f))
+        return { sessionId: f.replace('.jsonl', ''), mtime: stat.mtimeMs }
+      })
+      .sort((a, b) => b.mtime - a.mtime)
+  } catch { return null }
+
+  if (files.length === 0) return null
+
+  const newest = files[0]
+
+  // 没有漂移
+  if (newest.sessionId === registeredSessionId) return null
+
+  // 检查最新文件是否有 im2cc:<name> 标题（强归属信号）
+  const newestPath = path.join(slugDir, `${newest.sessionId}.jsonl`)
+  const titleMatch = checkSessionTitle(newestPath, name)
+
+  if (titleMatch) {
+    log(`[sync-drift] strong match: ${name} ${registeredSessionId.slice(0, 8)} → ${newest.sessionId.slice(0, 8)} (title im2cc:${name})`)
+    return newest.sessionId
+  }
+
+  // 无标题匹配——检查此项目是否只有一个活跃的 claude name
+  const sameProjectClaudeNames = activeNames.filter(
+    n => n.cwd === cwd && (n.tool ?? 'claude') === 'claude'
+  )
+
+  if (sameProjectClaudeNames.length === 1) {
+    // 同项目只有一个 claude name，安全地自动更新
+    log(`[sync-drift] single-name match: ${name} ${registeredSessionId.slice(0, 8)} → ${newest.sessionId.slice(0, 8)} (only claude name in project)`)
+    return newest.sessionId
+  }
+
+  // 多 name 且无标题匹配——不自动更新，记录日志
+  log(`[sync-drift] ambiguous: ${name} has ${sameProjectClaudeNames.length} claude names in same project, newest=${newest.sessionId.slice(0, 8)}, skipping auto-sync`)
+  return null
+}
+
+/** 检查 session 文件头部是否包含 im2cc:<name> 标题 */
+function checkSessionTitle(filePath: string, name: string): boolean {
+  try {
+    // 只读头部（前 50KB 足以覆盖 title 行）
+    const fd = fs.openSync(filePath, 'r')
+    const buf = Buffer.alloc(50 * 1024)
+    const bytesRead = fs.readSync(fd, buf, 0, buf.length, 0)
+    fs.closeSync(fd)
+    const head = buf.toString('utf-8', 0, bytesRead)
+    const target = `im2cc:${name}`
+    return head.includes(`"customTitle":"${target}"`) || head.includes(`"agentName":"${target}"`)
+  } catch { return false }
 }
