@@ -53,6 +53,14 @@ test('already-native mode names pass through unchanged', () => {
   assert.equal(mp.migrateLegacyMode('read-only', 'codex'), 'read-only')
 })
 
+test('Claude auto mode is valid and has correct cliArgs', () => {
+  assert.ok(mp.isValidMode('claude', 'auto'))
+  assert.deepEqual(mp.getModeCliArgs('claude', 'auto'), ['--permission-mode', 'auto'])
+  const mode = mp.getMode('claude', 'auto')
+  assert.ok(mode)
+  assert.equal(mode.label, '智能自动')
+})
+
 test('getModeCliArgs returns correct args', () => {
   assert.deepEqual(mp.getModeCliArgs('claude', 'bypassPermissions'), ['--dangerously-skip-permissions'])
   assert.deepEqual(mp.getModeCliArgs('codex', 'full-auto'), ['--full-auto'])

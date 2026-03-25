@@ -23,10 +23,17 @@ export interface ModeInfo {
 
 const claudeModes: ModeInfo[] = [
   {
+    id: 'auto',
+    label: '智能自动',
+    description: '安全操作自动执行，危险操作由分类器拦截',
+    detail: '等同 --permission-mode auto，无需确认且有安全护栏',
+    cliArgs: ['--permission-mode', 'auto'],
+  },
+  {
     id: 'bypassPermissions',
     label: '全自动',
     description: '跳过所有权限检查，自动执行所有操作',
-    detail: '等同 --dangerously-skip-permissions，适合远程控制',
+    detail: '等同 --dangerously-skip-permissions，无任何安全检查',
     cliArgs: ['--dangerously-skip-permissions'],
   },
   {
