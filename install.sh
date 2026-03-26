@@ -103,8 +103,11 @@ fi
 # shell 函数是薄包装（<20 行），所有逻辑在 im2cc CLI 中。
 # 直接写入 .zshrc/.bashrc，不依赖 source 外部文件，避免版本不同步。
 SHELL_RC=""
+CURRENT_SHELL="${SHELL:-}"
+CURRENT_ZSH_VERSION="${ZSH_VERSION:-}"
+ZSH_BIN="$(command -v zsh 2>/dev/null || true)"
 
-if [ -n "$ZSH_VERSION" ] || [ "$SHELL" = "$(which zsh)" ] || [ -f "$HOME/.zshrc" ]; then
+if [ -n "$CURRENT_ZSH_VERSION" ] || { [ -n "$ZSH_BIN" ] && [ "$CURRENT_SHELL" = "$ZSH_BIN" ]; } || [ -f "$HOME/.zshrc" ]; then
   SHELL_RC="$HOME/.zshrc"
 elif [ -f "$HOME/.bashrc" ]; then
   SHELL_RC="$HOME/.bashrc"

@@ -33,12 +33,7 @@ type DaemonState =
   | { kind: 'stale', pid: number | null }
   | { kind: 'stopped' }
 
-function inspectDaemonState(): DaemonState {
-  const livePids = listDaemonProcessPids(daemonMainModulePath())
-  if (livePids.length > 0) {
-    return { kind: 'running', pids: livePids }
-  }
-
+function inspectLocalDaemonState(): DaemonState {
   const daemonPidRecord = readDaemonPidRecord()
   if (daemonPidRecord.pid !== null) {
     return isIm2ccDaemonProcess(daemonPidRecord.pid, daemonMainModulePath())
@@ -62,6 +57,19 @@ function inspectDaemonState(): DaemonState {
   }
 
   return { kind: 'stopped' }
+}
+
+function inspectDaemonState(): DaemonState {
+  const localState = inspectLocalDaemonState()
+  const livePids = listDaemonProcessPids(daemonMainModulePath())
+  if (livePids.length > 0) {
+    if (localState.kind === 'running') {
+      const merged = [...new Set([...localState.pids, ...livePids])]
+      return { kind: 'running', pids: merged }
+    }
+    return { kind: 'running', pids: livePids }
+  }
+  return localState
 }
 
 function cleanupStaleDaemonState(): void {
@@ -719,10 +727,13 @@ async function cmdSetup(): Promise<void> {
   saveConfig(config)
   console.log(`\n✅ 配置已保存到 ${getConfigDir()}/config.json`)
   console.log('\n下一步:')
-  console.log('  1. 在飞书开放平台为应用添加 "机器人" 能力')
+  console.log('  1. 如果还没有飞书 Bot，先创建一个自建应用并添加 "机器人" 能力')
   console.log('  2. 添加权限: im:message, im:message:send_as_bot, im:message.group_msg:readonly, im:message.group_at_msg:readonly, im:chat:readonly, im:resource')
-  console.log('  3. 发布应用')
-  console.log('  4. 运行 im2cc start')
+  console.log('  3. 发布应用并把 Bot 加入一个飞书群')
+  console.log('  4. 运行 im2cc start && im2cc doctor')
+  console.log('  5. 在飞书群里先发 /help 或 /fl 验证链路')
+  console.log('  6. 在电脑上用 fn <名称> <项目路径> 创建一个真实对话，再用 /fc <名称> 验证接入')
+  console.log('  7. 如需开机自启动，运行 im2cc install-service')
 }
 
 function cmdInstallService(): void {
@@ -800,34 +811,60 @@ function cmdDoctor(): void {
   // 配置
   console.log(`配置文件: ${configExists() ? '✅ 已配置' : '❌ 未配置 (运行 im2cc setup)'}`)
 
-  // 飞书凭证
-  if (configExists()) {
-    const config = loadConfig()
-    console.log(`飞书 App ID: ${config.feishu.appId ? '✅ ****' + config.feishu.appId.slice(-4) : '❌ 未设置'}`)
-    console.log(`用户白名单: ${config.allowedUserIds.length > 0 ? '✅ ' + config.allowedUserIds.length + ' 人' : '⚠️ 未设置 (所有人可用)'}`)
-    console.log(`路径白名单: ${config.pathWhitelist.join(', ')}`)
-  }
+  const config = loadConfig()
+  console.log(`飞书 App ID: ${config.feishu.appId ? '✅ ****' + config.feishu.appId.slice(-4) : '⬤ 未设置'}`)
+  console.log(`用户白名单: ${config.allowedUserIds.length > 0 ? '✅ ' + config.allowedUserIds.length + ' 人' : '⚠️ 未设置 (所有人可用)'}`)
+  console.log(`路径白名单: ${config.pathWhitelist.join(', ')}`)
 
-  // 活跃绑定
+  // 注册表 / 活跃绑定
+  const registered = listRegistered()
+  console.log(`已注册对话: ${registered.length}${registered.length === 0 ? ' (先用 fn <名称> <项目路径> 创建)' : ''}`)
   const bindings = listActiveBindings()
   console.log(`活跃绑定: ${bindings.length}`)
 
   // PID 检查
-  const daemonState = inspectDaemonState()
+  const daemonState = inspectLocalDaemonState()
   if (daemonState.kind === 'running') {
-    const duplicateNote = daemonState.pids.length > 1 ? ' [重复实例]' : ''
-    console.log(`守护进程: 🟢 运行中 (PID: ${daemonState.pids.join(', ')})${duplicateNote}`)
+    console.log(`守护进程: 🟢 运行中 (PID: ${daemonState.pids.join(', ')})`)
   } else if (daemonState.kind === 'starting') {
     console.log('守护进程: 🟡 启动中')
   } else if (daemonState.kind === 'stale') {
-    console.log(`守护进程: ⬤ 未运行（检测到残留${daemonState.pid ? ` PID: ${daemonState.pid}` : ' 锁'}）`)
+    console.log(`守护进程: ⬤ 未运行（检测到当前配置目录残留${daemonState.pid ? ` PID: ${daemonState.pid}` : ' 锁'}）`)
   } else {
     console.log('守护进程: ⬤ 未运行')
+  }
+  const otherDaemonPids = listDaemonProcessPids(daemonMainModulePath()).filter(pid => daemonState.kind !== 'running' || !daemonState.pids.includes(pid))
+  if (otherDaemonPids.length > 0) {
+    console.log(`其他 im2cc 守护进程: ⚠️ ${otherDaemonPids.join(', ')} (系统内其他实例)`)
+  }
+
+  // 开机自启动（macOS）
+  if (process.platform === 'darwin') {
+    const plistFile = path.join(os.homedir(), 'Library/LaunchAgents', 'com.im2cc.daemon.plist')
+    if (!fs.existsSync(plistFile)) {
+      console.log('开机自启动: ⬤ 未安装 (运行 im2cc install-service)')
+    } else {
+      let loaded = false
+      const uid = typeof process.getuid === 'function' ? process.getuid() : null
+      if (uid !== null) {
+        try {
+          execFileSync('launchctl', ['print', `gui/${uid}/com.im2cc.daemon`], { stdio: 'ignore' })
+          loaded = true
+        } catch {}
+      }
+      console.log(`开机自启动: ${loaded ? '✅ 已安装并加载' : '⚠️ 已安装但未加载'}`)
+    }
   }
 
   // 微信
   const wechatAccount = loadWeChatAccount()
   console.log(`微信 ClawBot: ${wechatAccount?.botToken ? '✅ 已绑定' : '⬤ 未绑定 (im2cc wechat login)'}`)
+
+  console.log('\n首次成功标准:')
+  console.log('  1. 先运行 im2cc start')
+  console.log('  2. 在飞书/微信里发 /help 或 /fl')
+  console.log('  3. 在电脑上用 fn <名称> <项目路径> 创建一个真实对话')
+  console.log('  4. 在飞书/微信里发 /fc <名称>')
 }
 
 async function cmdWeChat(): Promise<void> {

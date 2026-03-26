@@ -1,0 +1,4 @@
+interface:
+  display_name: "Im2cc Onboarding"
+  short_description: "Help with Im2cc Onboarding tasks"
+  default_prompt: "Use $im2cc-onboarding to install, configure, and validate im2cc on this machine."

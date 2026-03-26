@@ -1,6 +1,6 @@
 # im2cc 安装指南（AI coding tool 执行用）
 
-> 本文件供 Claude Code / Codex / Kimi Code / Gemini CLI 读取并自动执行安装。用户不需要手动操作本文件中的步骤。
+> 本文件供 Claude Code / Codex / Kimi Code / Gemini CLI 读取并自动执行安装。用户不需要手动操作本文件中的步骤。完成仓库 checkout 后，也应继续读取仓库根目录的 `AGENTS.md` 和 repo-local onboarding instructions。
 
 ## 安装步骤
 
@@ -73,9 +73,9 @@ fn-gemini(){ im2cc new --tool gemini "$@"; }
 **询问用户**想用飞书还是微信（或两者都用）。
 
 **飞书设置**：
-1. 告知用户需要在 [飞书开放平台](https://open.feishu.cn/) 创建一个自建应用
-2. 应用需要添加「机器人」能力
-3. 需要申请以下权限：`im:message`、`im:message:send_as_bot`、`im:message.group_msg:readonly`、`im:message.group_at_msg:readonly`、`im:chat:readonly`、`im:resource`
+1. 先检查用户是否已经有可复用的飞书 Bot 与凭证
+2. 如果没有，且环境里可用 `$create-feishu-bot`，优先调用它自动完成创建、权限和验证
+3. 如果没有该 skill，则回退到手动流程：在 [飞书开放平台](https://open.feishu.cn/) 创建自建应用，添加「机器人」能力，并申请以下权限：`im:message`、`im:message:send_as_bot`、`im:message.group_msg:readonly`、`im:message.group_at_msg:readonly`、`im:chat:readonly`、`im:resource`
 4. 获取 App ID 和 App Secret 后，运行 `im2cc setup` 输入凭证
 5. 把 Bot 添加到一个飞书群中
 
@@ -84,20 +84,49 @@ fn-gemini(){ im2cc new --tool gemini "$@"; }
 2. 运行 `im2cc wechat login`，会在终端显示 QR 码
 3. 让用户用微信扫码
 
-### 6. 启动并验证
+### 6. 启动并验证消息链路
 
 ```bash
 im2cc start
 im2cc doctor
 ```
 
-告知用户在飞书群或微信中发送 `/fl` 测试。如果能看到对话列表，说明安装成功。
+告知用户在飞书群或微信中先发送 `/help` 或 `/fl` 测试。这一步只验证消息链路，不代表完整安装已经结束。
 
-### 7. 教用户基本操作
+### 7. 验证一次真实对话流转
+
+在电脑端创建一个真实对话，例如：
+
+```bash
+fn demo <项目路径>
+```
+
+然后让用户在飞书群或微信中执行：
+
+```text
+/fl
+/fc demo
+```
+
+只有当用户能看到对话并成功接入后，才算完成第一次成功验证。
+
+### 8. 配置开机自启动（推荐）
+
+如果用户同意开启开机自启动，在 macOS 上执行：
+
+```bash
+im2cc install-service
+launchctl load ~/Library/LaunchAgents/com.im2cc.daemon.plist
+```
+
+然后再次运行 `im2cc status` 或 `im2cc doctor` 验证。
+
+### 9. 教用户基本操作
 
 安装完成后，简要告诉用户：
 - 在电脑上用 `fn <名称> <项目路径>` 创建对话
 - 如果要指定工具，用 `fn --tool codex|kimi|gemini <名称> <项目路径>`
 - 离开电脑后在飞书/微信中用 `/fc <名称>` 接入
 - 回到电脑后用 `fc <名称>` 接回
+- 用 `/help` 查看 IM 端命令说明
 - 用 `fl` 查看所有对话
