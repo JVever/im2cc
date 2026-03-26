@@ -99,6 +99,11 @@ switch (command) {
 
 用法: im2cc <command>
 
+正式支持:
+  IM: 飞书 / 微信
+  Tool: Claude Code / Codex
+  Best-effort: Gemini
+
 对话管理:
   new [--tool <工具>] <名称> [路径]  创建新对话
   connect [名称] [ID前缀]           接入已有对话（别名: open）

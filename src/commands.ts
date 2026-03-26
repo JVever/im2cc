@@ -318,14 +318,14 @@ function handleFd(conversationId: string): string {
   ].join('\n')
 }
 
-import { getToolModes, isValidMode, migrateLegacyMode, type ModeInfo } from './mode-policy.js'
+import { getToolModes, migrateLegacyMode, resolveMode, type ModeInfo } from './mode-policy.js'
 import { setDefaultMode, getDefaultMode } from './config.js'
 
-/** 格式化模式列表（● 当前 / ○ 其他） */
+/** 格式化模式列表（● 当前 / ○ 其他），显示别名 */
 function formatModeList(modes: ModeInfo[], currentMode: string): string {
   return modes.map(m => {
     const marker = m.id === currentMode ? '●' : '○'
-    return `${marker} ${m.id}\n  ${m.label} — ${m.description}\n  ${m.detail}`
+    return `${marker} ${m.alias} → ${m.id}\n  ${m.label} — ${m.description}\n  ${m.detail}`
   }).join('\n\n')
 }
 
@@ -337,11 +337,14 @@ function handleMode(args: string, conversationId: string, config: Im2ccConfig): 
   const tool = (regEntry?.tool ?? binding.tool ?? 'claude') as ToolId
   const modes = getToolModes(tool)
   const toolName = tool === 'claude' ? 'Claude Code' : tool.charAt(0).toUpperCase() + tool.slice(1)
+  const modeListUsage = '直接发送 /mode 查看可用模式'
+  const modeSwitchUsage = '/mode <模式别名>（例如 /mode au）'
+  const modeDefaultUsage = '/mode default <模式别名>'
 
   // 当前模式：迁移旧名到原生名
   const currentMode = migrateLegacyMode(binding.permissionMode, tool)
 
-  // /mode — 无参数：展示当前模式 + 所有可用模式
+  // /mode — 展示当前模式 + 所有可用模式
   if (!args) {
     if (modes.length === 0) return `${toolName} 暂无可配置的模式`
     return [
@@ -351,53 +354,89 @@ function handleMode(args: string, conversationId: string, config: Im2ccConfig): 
       '',
       formatModeList(modes, currentMode),
       '',
-      '/mode <模式名> 切换',
-      '/mode default <模式名> 设为新建会话默认模式',
+      `${modeListUsage} 查看可用模式`,
+      modeSwitchUsage,
+      `${modeDefaultUsage} 设为新建会话默认模式`,
     ].join('\n')
   }
 
   const parts = args.split(/\s+/)
 
+  const availableHint = modes.map(m => `${m.alias}/${m.id}`).join(', ')
+
   // /mode default <name> — 设置默认模式
   if (parts[0] === 'default') {
-    const modeId = parts[1]
-    if (!modeId) {
+    const modeInput = parts[1]
+    if (!modeInput) {
       const current = getDefaultMode(tool, config)
-      return `${toolName} 当前默认模式: ${current}\n\n用法: /mode default <模式名>`
+      return `${toolName} 当前默认模式: ${current}\n\n用法: ${modeDefaultUsage}`
     }
-    if (!isValidMode(tool, modeId)) {
-      const available = modes.map(m => m.id).join(', ')
-      return `"${modeId}" 不是 ${toolName} 的有效模式\n可用: ${available}`
+    const resolved = resolveMode(tool, modeInput)
+    if (!resolved) {
+      return `"${modeInput}" 不是 ${toolName} 的有效模式\n可用: ${availableHint}`
     }
-    setDefaultMode(tool, modeId)
-    return `${toolName} 默认模式已设为 ${modeId}\n新建 ${toolName} 会话时将使用此模式`
+    setDefaultMode(tool, resolved)
+    return `${toolName} 默认模式已设为 ${resolved}\n新建 ${toolName} 会话时将使用此模式`
   }
 
   // /mode <name> — 切换当前会话模式
-  const modeId = parts[0]
-  if (!isValidMode(tool, modeId)) {
-    const available = modes.map(m => m.id).join(', ')
-    return `"${modeId}" 不是 ${toolName} 的有效模式\n可用: ${available}`
+  const resolved = resolveMode(tool, parts[0])
+  if (!resolved) {
+    return `"${parts[0]}" 不是 ${toolName} 的有效模式\n可用: ${availableHint}`
   }
 
-  updateBinding(conversationId, { permissionMode: modeId })
+  updateBinding(conversationId, { permissionMode: resolved })
   if (regEntry) {
-    updateRegistry(regEntry.name, { permissionMode: modeId })
+    updateRegistry(regEntry.name, { permissionMode: resolved })
   }
 
-  const modeInfo = modes.find(m => m.id === modeId)
-  return `模式已切换为 ${modeId}（${modeInfo?.label}）\n下一条消息生效`
+  const modeInfo = modes.find(m => m.id === resolved)
+  return `模式已切换为 ${resolved}（${modeInfo?.label}）\n下一条消息生效`
+}
+
+function toolDisplayName(tool: string): string {
+  switch (tool) {
+    case 'claude': return 'Claude'
+    case 'codex': return 'Codex'
+    case 'gemini': return 'Gemini'
+    default: return tool
+  }
+}
+
+function toolDisplayOrder(tool: string): number {
+  switch (tool) {
+    case 'claude': return 0
+    case 'codex': return 1
+    case 'gemini': return 2
+    default: return 99
+  }
 }
 
 function handleFl(): string {
   const registered = listRegistered()
   if (registered.length === 0) return '没有已注册的对话。用 /fn <名称> 创建。'
 
-  const lines = registered.map(s => {
-    const toolTag = s.tool && s.tool !== 'claude' ? ` [${s.tool}]` : ''
-    return `  ${s.name} (${path.basename(s.cwd)})${toolTag}`
+  // 按工具分组，组内按字母序，并保留项目 basename 方便在手机端区分
+  const byTool = new Map<string, Array<{ name: string, cwdBase: string }>>()
+  for (const s of registered) {
+    const tool = s.tool || 'claude'
+    if (!byTool.has(tool)) byTool.set(tool, [])
+    byTool.get(tool)!.push({ name: s.name, cwdBase: path.basename(s.cwd) })
+  }
+  for (const sessions of byTool.values()) {
+    sessions.sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  const sections: string[] = []
+  const orderedTools = [...byTool.keys()].sort((a, b) => {
+    const orderDelta = toolDisplayOrder(a) - toolDisplayOrder(b)
+    return orderDelta !== 0 ? orderDelta : a.localeCompare(b)
   })
-  return `📋 已注册的对话:\n${lines.join('\n')}`
+  for (const tool of orderedTools) {
+    const sessions = byTool.get(tool)!
+    sections.push(`── ${toolDisplayName(tool)} ──\n${sessions.map(s => `  ${s.name} (${s.cwdBase})`).join('\n')}`)
+  }
+  return `📋 已注册的对话 (${registered.length}):\n${sections.join('\n')}`
 }
 
 function handleFk(args: string, conversationId: string): string {
@@ -442,7 +481,8 @@ function handleHelp(): string {
     '/fd                      — 断开当前对话',
     '/fs                      — 查看当前状态',
     '',
-    '/mode <模式>             — 切换模式 (YOLO|default|auto-edit)',
+    '/mode                    — 查看可用模式',
+    '/mode <模式别名>         — 切换模式（例如 /mode au）',
     '/stop                    — 中断当前执行',
     '',
     '直接发消息即转给当前接入的 AI 工具',

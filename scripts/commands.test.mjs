@@ -1,0 +1,104 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'im2cc-commands-'))
+process.env.HOME = testHome
+
+const commands = await import(path.join(rootDir, 'dist', 'src', 'commands.js'))
+const configMod = await import(path.join(rootDir, 'dist', 'src', 'config.js'))
+const registry = await import(path.join(rootDir, 'dist', 'src', 'registry.js'))
+const session = await import(path.join(rootDir, 'dist', 'src', 'session.js'))
+
+function resetState() {
+  fs.rmSync(path.join(testHome, '.im2cc'), { recursive: true, force: true })
+}
+
+function configForTests() {
+  return {
+    ...configMod.loadConfig(),
+    pathWhitelist: [path.join(testHome, 'Code')],
+    defaultModes: {},
+  }
+}
+
+function registerSession(name, cwdBase, tool, conversationId, permissionMode = 'default') {
+  const cwd = path.join(testHome, 'Code', cwdBase)
+  fs.mkdirSync(cwd, { recursive: true })
+  registry.register(name, `${name}-session`, cwd, tool)
+  session.createBinding(conversationId, `${name}-session`, cwd, permissionMode, 'test-cli', 'feishu', tool)
+  return cwd
+}
+
+test('help and mode list surface aliases for mobile input', async () => {
+  resetState()
+  const config = configForTests()
+  configMod.saveConfig(config)
+  registerSession('alpha', 'im2cc', 'claude', 'conv-help', 'auto')
+
+  const modeCmd = commands.parseCommand('/mode')
+  assert.ok(modeCmd)
+  const modeOutput = await commands.handleCommand(modeCmd, 'conv-help', config)
+  assert.match(modeOutput, /au → auto/)
+  assert.match(modeOutput, /bp → bypassPermissions/)
+  assert.match(modeOutput, /直接发送 \/mode 查看可用模式/)
+  assert.match(modeOutput, /\/mode <模式别名>/)
+
+  const helpCmd = commands.parseCommand('/help')
+  assert.ok(helpCmd)
+  const helpOutput = await commands.handleCommand(helpCmd, 'conv-help', config)
+  assert.match(helpOutput, /\/mode\s+— 查看可用模式/)
+  assert.match(helpOutput, /\/mode <模式别名>/)
+  assert.match(helpOutput, /例如 \/mode au/)
+})
+
+test('mode aliases switch current session mode and default mode', async () => {
+  resetState()
+  const config = configForTests()
+  configMod.saveConfig(config)
+  registerSession('alpha', 'im2cc', 'claude', 'conv-mode', 'default')
+
+  const switchCmd = commands.parseCommand('/mode au')
+  assert.ok(switchCmd)
+  const switchOutput = await commands.handleCommand(switchCmd, 'conv-mode', config)
+  assert.match(switchOutput, /模式已切换为 auto/)
+  assert.equal(session.getBinding('conv-mode')?.permissionMode, 'auto')
+  assert.equal(registry.lookup('alpha')?.permissionMode, 'auto')
+
+  const defaultCmd = commands.parseCommand('/mode default ae')
+  assert.ok(defaultCmd)
+  const defaultOutput = await commands.handleCommand(defaultCmd, 'conv-mode', configMod.loadConfig())
+  assert.match(defaultOutput, /默认模式已设为 acceptEdits/)
+  assert.equal(configMod.getDefaultMode('claude', configMod.loadConfig()), 'acceptEdits')
+})
+
+test('/fl groups sessions by tool, sorts names, and keeps cwd basename', async () => {
+  resetState()
+  const config = configForTests()
+  configMod.saveConfig(config)
+  registerSession('zebra', 'website', 'codex', 'conv-zebra')
+  registerSession('beta', 'portal', 'claude', 'conv-beta')
+  registerSession('alpha', 'im2cc', 'claude', 'conv-alpha')
+
+  const flCmd = commands.parseCommand('/fl')
+  assert.ok(flCmd)
+  const output = await commands.handleCommand(flCmd, 'conv-alpha', config)
+
+  assert.match(output, /📋 已注册的对话 \(3\):/)
+  assert.match(output, /── Claude ──/)
+  assert.match(output, /── Codex ──/)
+  assert.match(output, /alpha \(im2cc\)/)
+  assert.match(output, /beta \(portal\)/)
+  assert.match(output, /zebra \(website\)/)
+
+  const claudeIndex = output.indexOf('── Claude ──')
+  const codexIndex = output.indexOf('── Codex ──')
+  const alphaIndex = output.indexOf('  alpha (im2cc)')
+  const betaIndex = output.indexOf('  beta (portal)')
+  assert.ok(claudeIndex >= 0 && codexIndex > claudeIndex, 'tool sections should follow stable display order')
+  assert.ok(alphaIndex > claudeIndex && betaIndex > alphaIndex, 'Claude sessions should sort by name')
+})

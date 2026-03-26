@@ -74,3 +74,50 @@ test('unknown tool returns empty modes and falls back gracefully', () => {
   assert.equal(mp.getBuiltinDefault('unknown'), 'default')
   assert.deepEqual(mp.getModeCliArgs('unknown', 'anything'), [])
 })
+
+// ── alias tests ──────────────────────────────────────────────────
+
+test('all modes have a 2-char alias', () => {
+  for (const tool of ['claude', 'codex', 'gemini']) {
+    for (const m of mp.getToolModes(tool)) {
+      assert.ok(m.alias, `alias required for ${tool}/${m.id}`)
+      assert.equal(m.alias.length, 2, `alias should be 2 chars for ${tool}/${m.id}`)
+    }
+  }
+})
+
+test('each tool has unique aliases', () => {
+  for (const tool of ['claude', 'codex', 'gemini']) {
+    const aliases = mp.getToolModes(tool).map(m => m.alias)
+    assert.equal(aliases.length, new Set(aliases).size, `${tool} has duplicate aliases`)
+  }
+})
+
+test('resolveMode resolves full names', () => {
+  assert.equal(mp.resolveMode('claude', 'auto'), 'auto')
+  assert.equal(mp.resolveMode('codex', 'full-auto'), 'full-auto')
+  assert.equal(mp.resolveMode('gemini', 'yolo'), 'yolo')
+})
+
+test('resolveMode resolves 2-letter aliases', () => {
+  assert.equal(mp.resolveMode('claude', 'au'), 'auto')
+  assert.equal(mp.resolveMode('claude', 'bp'), 'bypassPermissions')
+  assert.equal(mp.resolveMode('claude', 'ae'), 'acceptEdits')
+  assert.equal(mp.resolveMode('claude', 'df'), 'default')
+  assert.equal(mp.resolveMode('codex', 'bp'), 'bypass')
+  assert.equal(mp.resolveMode('codex', 'fa'), 'full-auto')
+  assert.equal(mp.resolveMode('codex', 'ro'), 'read-only')
+  assert.equal(mp.resolveMode('gemini', 'yo'), 'yolo')
+  assert.equal(mp.resolveMode('gemini', 'ae'), 'auto_edit')
+  assert.equal(mp.resolveMode('gemini', 'df'), 'default')
+})
+
+test('resolveMode is case-insensitive for aliases', () => {
+  assert.equal(mp.resolveMode('claude', 'AU'), 'auto')
+  assert.equal(mp.resolveMode('codex', 'RO'), 'read-only')
+})
+
+test('resolveMode returns undefined for invalid input', () => {
+  assert.equal(mp.resolveMode('claude', 'xx'), undefined)
+  assert.equal(mp.resolveMode('codex', 'yolo'), undefined)
+})
