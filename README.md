@@ -50,6 +50,8 @@ bash install.sh
 
 安装脚本会自动完成：依赖安装、编译、注册全局命令、配置终端快捷命令、安装 Claude Code 的 session 同步 hook。之后仍需要继续做 IM 接入、首次验证和可选的开机自启动。
 
+安装完成后，后续升级优先直接运行 `im2cc upgrade`。
+
 ## 升级已有安装
 
 以后升级，优先直接运行：
@@ -64,16 +66,6 @@ im2cc upgrade
 - 重新执行安装脚本
 - 刷新终端快捷命令和 Claude hook
 - 如果升级前 daemon 正在运行，自动重启让新版本生效
-
-如果你的版本还比较旧，暂时没有 `im2cc upgrade`，再退回到手动升级：
-
-```bash
-cd ~/im2cc
-git pull --ff-only
-bash install.sh
-im2cc stop
-im2cc start
-```
 
 你的运行时配置保存在 `~/.im2cc/`，正常升级不会覆盖这部分内容。
 
@@ -208,7 +200,7 @@ im2cc doctor
 | `/mode` | 查看可用模式 | — | `/mode` |
 | `/mode <模式别名>` | 切换权限模式 | — | `/mode au` |
 | `/stop` | 中断执行中的任务 | — | `/stop` |
-| `fhelp` | 查看帮助 | `fhelp` | `/fhelp` |
+| `im2cc help` / `fhelp` | 查看帮助 | `im2cc help` 或 `fhelp` | `/fhelp` |
 
 说明：
 
@@ -217,7 +209,7 @@ im2cc doctor
 - 在飞书/微信里，建议显式写项目名：`/fn <名称> <项目名> [--tool ...]`。
 - 终端里提供两个便捷别名：`fn-codex <名称> [路径]`、`fn-gemini <名称> [路径]`。
 - 标准写法仍然是 `fn --tool codex|gemini <名称> [路径]`；在 IM 中请继续使用 `/fn ... --tool codex|gemini`，不要写 `/fn-codex`。
-- 查看帮助时，电脑终端用 `fhelp`，飞书/微信里用 `/fhelp`。旧的 `/help` 仍兼容，但不再作为主要入口。
+- 查看帮助时，电脑终端优先用 `im2cc help`；`fhelp` 只是快捷命令。飞书/微信里用 `/fhelp`。旧的 `/help` 仍兼容，但不再作为主要入口。
 
 ## 安全与隐私
 
