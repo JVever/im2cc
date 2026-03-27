@@ -10,10 +10,27 @@
 
 Verify:
 
+- `git` is available
 - Node.js >= 20
 - tmux
 - at least one supported AI CLI
 - repo checkout present
+
+## Checkout rule
+
+Before checkout:
+
+- prefer `git clone https://github.com/JVever/im2cc.git`
+- treat the repo as public
+- do not require `gh auth login`
+- if `git clone` fails but ordinary HTTPS downloads still work, fall back to the public source archive:
+
+  ```bash
+  mkdir -p ~/im2cc
+  curl -L https://codeload.github.com/JVever/im2cc/tar.gz/refs/heads/master | tar -xz -C ~/im2cc --strip-components=1
+  ```
+
+- if both checkout paths fail, diagnose missing `git`, network, proxy, or filesystem permission issues before asking the user to authenticate anywhere
 
 ## Base install
 

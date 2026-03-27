@@ -16,6 +16,21 @@ Use the repo-local `im2cc-onboarding` skill when the user wants any of the follo
 
 Treat onboarding as a stateful workflow, not as a one-shot shell script.
 
+When the repository is not yet present locally:
+
+- treat `https://github.com/JVever/im2cc.git` as a public repository
+- prefer plain `git clone` over HTTPS
+- do not require `gh auth login`
+- do not route through authenticated GitHub APIs or integrations unless the user explicitly asks for that path
+- if `git clone` fails but ordinary HTTPS downloads still work, fall back to downloading the public source archive:
+
+  ```bash
+  mkdir -p ~/im2cc
+  curl -L https://codeload.github.com/JVever/im2cc/tar.gz/refs/heads/master | tar -xz -C ~/im2cc --strip-components=1
+  ```
+
+- if both checkout paths fail, diagnose `git` availability and network access before asking the user to log in anywhere
+
 You should:
 
 1. detect the current install state

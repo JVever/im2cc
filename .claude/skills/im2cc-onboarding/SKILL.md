@@ -7,6 +7,21 @@ description: "Complete the full im2cc onboarding journey after the repository is
 
 Use this skill after the `im2cc` repository is already present on disk. This skill is the repo-local onboarding orchestrator for zero-to-one setup and first-run success.
 
+If the user only provides the GitHub URL before checkout:
+
+- treat `https://github.com/JVever/im2cc.git` as a public repo
+- prefer plain `git clone` over HTTPS
+- do not depend on `gh auth login`
+- do not assume any authenticated GitHub integration is required
+- if `git clone` fails but ordinary HTTPS downloads still work, fall back to the public source archive:
+
+  ```bash
+  mkdir -p ~/im2cc
+  curl -L https://codeload.github.com/JVever/im2cc/tar.gz/refs/heads/master | tar -xz -C ~/im2cc --strip-components=1
+  ```
+
+- if both checkout paths fail, first diagnose missing `git` or network/proxy issues
+
 ## Scope
 
 This skill owns the full journey from repository checkout to real mobile usage:
