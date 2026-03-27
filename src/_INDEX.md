@@ -12,6 +12,7 @@ im2cc 核心业务逻辑：IM 消息接收 → 命令路由 → 本地 AI coding
 - security.ts：用户白名单检查、路径验证与白名单
 - mode-policy.ts：模式注册表 — 每个工具的可用模式、中文描述、CLI 参数映射、默认模式、旧名迁移
 - tool-cli-args.ts：各工具交互式 CLI 参数映射（tmux create/resume + resume hint）
+- tool-compat.ts：工具 CLI 可选能力探测（例如 Claude 是否支持 `--name`）
 - session.ts：Session 绑定 CRUD、原子写、消息去重
 - claude-driver.ts：Claude Code CLI 驱动（spawn、stream-json 解析、中断）
 - codex-driver.ts：Codex CLI 驱动（thread_id 创建、resume、输出解析）

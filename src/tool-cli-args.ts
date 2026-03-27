@@ -5,6 +5,7 @@
  */
 
 import type { ToolId } from './tool-driver.js'
+import { claudeSessionNameArgs } from './tool-compat.js'
 
 export function resumeCommand(tool: ToolId, sessionId: string): string {
   switch (tool) {
@@ -21,7 +22,7 @@ export function resumeCommand(tool: ToolId, sessionId: string): string {
  */
 export function toolCreateArgs(tool: ToolId, sessionId: string, name: string): string[] {
   switch (tool) {
-    case 'claude': return ['claude', '--session-id', sessionId, '--dangerously-skip-permissions', '--name', `im2cc:${name}`]
+    case 'claude': return ['claude', '--session-id', sessionId, '--dangerously-skip-permissions', ...claudeSessionNameArgs(name)]
     case 'codex': return ['codex']
     case 'gemini': return ['gemini']
     default: return [tool]
@@ -33,7 +34,7 @@ export function toolCreateArgs(tool: ToolId, sessionId: string, name: string): s
  */
 export function toolResumeArgs(tool: ToolId, sessionId: string, name: string): string[] {
   switch (tool) {
-    case 'claude': return ['claude', '--resume', sessionId, '--dangerously-skip-permissions', '--name', `im2cc:${name}`]
+    case 'claude': return ['claude', '--resume', sessionId, '--dangerously-skip-permissions', ...claudeSessionNameArgs(name)]
     case 'codex': return ['codex', 'resume', sessionId]
     case 'gemini': return ['gemini', '--resume', sessionId]
     default: return [tool, '--resume', sessionId]

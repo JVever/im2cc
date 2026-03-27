@@ -18,6 +18,7 @@ import { getDriver, hasDriver, type ToolId } from '../src/tool-driver.js'
 import { resumeCommand, toolCreateArgs, toolResumeArgs } from '../src/tool-cli-args.js'
 import { findSession, syncDriftedSession } from '../src/discover.js'
 import { DAEMON_LOCK_STARTUP_GRACE_MS, daemonMainModulePath, isIm2ccDaemonProcess, killAllDaemonProcesses, listDaemonProcessPids, readDaemonPidRecord } from '../src/daemon-process.js'
+import { claudeSupportsSessionNameFlag } from '../src/tool-compat.js'
 import readline from 'node:readline'
 
 // 触发各 driver 自注册（模块级副作用）
@@ -794,6 +795,9 @@ function cmdDoctor(): void {
   // AI 编程工具
   const claudeVersion = getClaudeVersion()
   console.log(`claude: ${claudeVersion === 'unknown' ? '⬤ 未安装' : '✅ ' + claudeVersion}`)
+  if (claudeVersion !== 'unknown') {
+    console.log(`Claude 会话显示名: ${claudeSupportsSessionNameFlag() ? '✅ 支持 --name' : '⚠️ 当前版本不支持 --name，已自动降级'}`)
+  }
   for (const tool of ['codex', 'gemini']) {
     try {
       execFileSync('which', [tool], { stdio: 'ignore' })

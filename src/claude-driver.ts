@@ -13,6 +13,7 @@ import { pathToSlug } from './discover.js'
 import { BaseToolDriver, selectTurns, formatRecap, type RecapTurn } from './base-driver.js'
 import { filterInitTurns } from './recap.js'
 import { registerDriver, type ToolCapabilities, type CreateSessionResult, type SendMessageOptions, type SessionFileStatus } from './tool-driver.js'
+import { claudeSessionNameArgs } from './tool-compat.js'
 
 export class ClaudeDriver extends BaseToolDriver {
   readonly id = 'claude' as const
@@ -32,11 +33,10 @@ export class ClaudeDriver extends BaseToolDriver {
 
   async createSession(cwd: string, permissionMode: string, name?: string): Promise<CreateSessionResult> {
     const sessionId = this.generateSessionId()
-    const extraFlags = name ? ['--name', `im2cc:${name}`] : []
     const output = await this.runTool({
       cmd: 'claude',
       message: '会话已建立。请回复"就绪"。',
-      args: ['-p', '会话已建立。请回复"就绪"。', '--session-id', sessionId, ...extraFlags, '--output-format', 'stream-json', '--verbose', ...permissionArgs(permissionMode)],
+      args: ['-p', '会话已建立。请回复"就绪"。', '--session-id', sessionId, ...claudeSessionNameArgs(name), '--output-format', 'stream-json', '--verbose', ...permissionArgs(permissionMode)],
       cwd,
     })
     return { sessionId, output }
