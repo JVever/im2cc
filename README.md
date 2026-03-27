@@ -52,24 +52,25 @@ bash install.sh
 
 ## 升级已有安装
 
-如果你之前已经通过 `git clone` 安装过 `im2cc`，后续更新通常用这一组命令就够了：
+以后升级，优先直接运行：
+
+```bash
+im2cc upgrade
+```
+
+这个命令会自动完成：
+
+- 拉取最新代码
+- 重新执行安装脚本
+- 刷新终端快捷命令和 Claude hook
+- 如果升级前 daemon 正在运行，自动重启让新版本生效
+
+如果你的版本还比较旧，暂时没有 `im2cc upgrade`，再退回到手动升级：
 
 ```bash
 cd ~/im2cc
 git pull --ff-only
-npm install
-npm run build
-```
-
-如果这次更新涉及安装脚本、终端快捷命令、Claude hook，或者你懒得判断，可以在 `git pull` 后直接再跑一遍：
-
-```bash
 bash install.sh
-```
-
-如果这台机器当前正在运行 `im2cc` 守护进程，更新代码后还需要重启一次，才能让新版本真正生效：
-
-```bash
 im2cc stop
 im2cc start
 ```
@@ -87,7 +88,7 @@ im2cc setup
 im2cc start
 ```
 
-把 Bot 加入飞书群后，先在群里发 `/help` 或 `/fl` 验证消息链路；再按下面的“第一次成功”完成一次真实会话接入。
+把 Bot 加入飞书群后，先在群里发 `/fhelp` 或 `/fl` 验证消息链路；再按下面的“第一次成功”完成一次真实会话接入。
 
 <details>
 <summary>飞书 App 需要的权限（6 个）</summary>
@@ -112,7 +113,7 @@ im2cc wechat login
 im2cc start
 ```
 
-微信接通后，同样建议先发 `/help` 或 `/fl` 验证链路，再完成一次真实会话接入。
+微信接通后，同样建议先发 `/fhelp` 或 `/fl` 验证链路，再完成一次真实会话接入。
 
 ## 第一次成功
 
@@ -189,7 +190,7 @@ im2cc doctor
 | 能力 | 当前状态 | 说明 |
 |------|----------|------|
 | 未注册本地历史会话自动发现 | `Claude Code` | 通过 `/fc <新名称> <ID前缀>` 注册并接入 |
-| `fn-codex` / `fn-gemini` 终端快捷命令 | 可用 | 仅电脑终端可用，IM 里仍使用 `/fn --tool ...` |
+| `fn-codex` / `fn-gemini` 终端快捷命令 | 可用 | 仅电脑终端可用，IM 里不提供 `/fn-codex` 这类命令 |
 | Claude 会话漂移同步 hook | 可用 | 仅对 `Claude Code` 安装 |
 
 ## 命令速查
@@ -207,6 +208,7 @@ im2cc doctor
 | `/mode` | 查看可用模式 | — | `/mode` |
 | `/mode <模式别名>` | 切换权限模式 | — | `/mode au` |
 | `/stop` | 中断执行中的任务 | — | `/stop` |
+| `fhelp` | 查看帮助 | `fhelp` | `/fhelp` |
 
 说明：
 
@@ -215,6 +217,7 @@ im2cc doctor
 - 在飞书/微信里，建议显式写项目名：`/fn <名称> <项目名> [--tool ...]`。
 - 终端里提供两个便捷别名：`fn-codex <名称> [路径]`、`fn-gemini <名称> [路径]`。
 - 标准写法仍然是 `fn --tool codex|gemini <名称> [路径]`；在 IM 中请继续使用 `/fn ... --tool codex|gemini`，不要写 `/fn-codex`。
+- 查看帮助时，电脑终端用 `fhelp`，飞书/微信里用 `/fhelp`。旧的 `/help` 仍兼容，但不再作为主要入口。
 
 ## 安全与隐私
 

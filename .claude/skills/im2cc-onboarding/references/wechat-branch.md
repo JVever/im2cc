@@ -15,6 +15,6 @@ Confirm the user has ClawBot enabled in WeChat.
 - run `im2cc wechat login`
 - wait for QR-based bind success
 - verify with `im2cc doctor`
-- ask the user to send `/help` or `/fl`
+- ask the user to send `/fhelp` or `/fl`
 
 Then continue into first real session validation.

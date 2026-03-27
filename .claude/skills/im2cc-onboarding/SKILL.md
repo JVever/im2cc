@@ -114,7 +114,7 @@ After channel setup:
 
 - run `im2cc start`
 - run `im2cc doctor`
-- ask the user to send `/help` or `/fl` from IM
+- ask the user to send `/fhelp` or `/fl` from IM
 
 This validates message ingress and reply, but it does not yet prove real session flow.
 
@@ -155,7 +155,7 @@ Interrupt the user only for:
 Do not mark onboarding complete until all applicable checks pass:
 
 - `im2cc doctor`
-- IM responds to `/help` or `/fl`
+- IM responds to `/fhelp` or `/fl`
 - one real session exists
 - `/fc <name>` works from IM
 - user has made a choice about auto-start

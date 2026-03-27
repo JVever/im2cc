@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * @input:    CLI 参数 (start/stop/status/logs/sessions/new/connect/list/delete/detach/show/setup/install-service/doctor/wechat)
+ * @input:    CLI 参数 (start/stop/status/logs/sessions/new/connect/list/delete/detach/show/setup/install-service/doctor/help/upgrade/wechat)
  * @output:   守护进程管理 + 完整 session 管理命令（new/connect/list/delete/detach/show）
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
@@ -19,6 +19,8 @@ import { resumeCommand, toolCreateArgs, toolResumeArgs } from '../src/tool-cli-a
 import { findSession, syncDriftedSession } from '../src/discover.js'
 import { DAEMON_LOCK_STARTUP_GRACE_MS, daemonMainModulePath, isIm2ccDaemonProcess, killAllDaemonProcesses, listDaemonProcessPids, readDaemonPidRecord } from '../src/daemon-process.js'
 import { claudeSupportsSessionNameFlag } from '../src/tool-compat.js'
+import { renderUnifiedHelp } from '../src/commands.js'
+import { detectInstallRoot, listReplaceableInstallEntries, PUBLIC_ARCHIVE_URL } from '../src/upgrade.js'
 import readline from 'node:readline'
 
 // 触发各 driver 自注册（模块级副作用）
@@ -65,6 +67,116 @@ function cleanupStaleDaemonState(): void {
   try { fs.rmSync(getDaemonLockDir(), { recursive: true, force: true }) } catch {}
 }
 
+function cmdHelp(): void {
+  console.log(renderUnifiedHelp())
+}
+
+function commandExists(commandName: string): boolean {
+  try {
+    execFileSync(commandName, ['--version'], { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+}
+
+function currentInstallRoot() {
+  return detectInstallRoot(import.meta.dirname)
+}
+
+function ensureCleanGitCheckout(root: string): void {
+  const status = execFileSync('git', ['status', '--porcelain'], {
+    cwd: root,
+    encoding: 'utf-8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  }).trim()
+
+  if (status) {
+    console.log('❌ 当前安装目录有未提交改动，已停止自动升级。')
+    console.log('请先提交、暂存或清理这些改动后再运行 im2cc upgrade。')
+    process.exit(1)
+  }
+}
+
+function upgradeFromPublicArchive(root: string): void {
+  if (!commandExists('curl') || !commandExists('tar')) {
+    console.log('❌ 当前安装不含 .git，需要用公开源码包升级，但本机缺少 curl 或 tar。')
+    console.log('请先安装 curl 与 tar，或重新用 git clone 安装后再升级。')
+    process.exit(1)
+  }
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'im2cc-upgrade-'))
+  const archivePath = path.join(tmpDir, 'im2cc.tar.gz')
+  const extractDir = path.join(tmpDir, 'extract')
+  fs.mkdirSync(extractDir, { recursive: true })
+
+  try {
+    console.log('当前安装目录不含 .git，改用公开源码包升级...')
+    execFileSync('curl', ['-L', PUBLIC_ARCHIVE_URL, '-o', archivePath], { stdio: 'inherit' })
+    execFileSync('tar', ['-xzf', archivePath, '-C', extractDir], { stdio: 'inherit' })
+
+    const entries = fs.readdirSync(extractDir)
+    if (entries.length === 0) throw new Error('公开源码包解压后为空')
+    const extractedRoot = path.join(extractDir, entries[0])
+
+    for (const entry of listReplaceableInstallEntries(root)) {
+      fs.rmSync(path.join(root, entry), { recursive: true, force: true })
+    }
+    for (const entry of fs.readdirSync(extractedRoot)) {
+      fs.cpSync(path.join(extractedRoot, entry), path.join(root, entry), { recursive: true, force: true })
+    }
+  } catch (err) {
+    console.log(`❌ 公开源码包升级失败: ${err instanceof Error ? err.message : String(err)}`)
+    process.exit(1)
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  }
+}
+
+async function cmdUpgrade(): Promise<void> {
+  const installRoot = currentInstallRoot()
+  if (!installRoot) {
+    console.log('❌ 无法定位 im2cc 安装目录。请进入仓库目录后重试。')
+    process.exit(1)
+  }
+
+  const daemonStateBefore = inspectLocalDaemonState()
+  const shouldRestartDaemon = daemonStateBefore.kind === 'running' || daemonStateBefore.kind === 'starting'
+
+  console.log(`开始升级 im2cc (${installRoot.root})`)
+
+  try {
+    if (installRoot.isGitCheckout) {
+      if (!commandExists('git')) {
+        console.log('❌ 当前安装目录包含 .git，但本机未安装 git。请先安装 git 后再升级。')
+        process.exit(1)
+      }
+      ensureCleanGitCheckout(installRoot.root)
+      console.log('正在拉取最新代码...')
+      execFileSync('git', ['pull', '--ff-only'], { cwd: installRoot.root, stdio: 'inherit' })
+    } else {
+      upgradeFromPublicArchive(installRoot.root)
+    }
+
+    console.log('正在重新执行安装脚本...')
+    execFileSync('bash', ['install.sh'], { cwd: installRoot.root, stdio: 'inherit' })
+
+    if (shouldRestartDaemon) {
+      console.log('检测到守护进程原本正在运行，正在重启...')
+      cmdStop()
+      await cmdStart()
+    } else {
+      console.log('守护进程当前未运行，本次不自动启动。')
+    }
+  } catch (err) {
+    console.log(`❌ 升级失败: ${err instanceof Error ? err.message : String(err)}`)
+    process.exit(1)
+  }
+
+  console.log('✅ 升级完成')
+  console.log('终端帮助: im2cc help（或重新打开终端后使用 fhelp）')
+}
+
 switch (command) {
   case 'start': await cmdStart(); break
   case 'stop': cmdStop(); break
@@ -81,6 +193,8 @@ switch (command) {
   case 'setup': await cmdSetup(); break
   case 'install-service': cmdInstallService(); break
   case 'doctor': cmdDoctor(); break
+  case 'help': cmdHelp(); break
+  case 'upgrade': await cmdUpgrade(); break
   case 'wechat': await cmdWeChat(); break
   default:
     console.log(`im2cc — IM to AI coding tools
@@ -116,6 +230,8 @@ switch (command) {
   sessions           列出活跃绑定
   install-service    安装 macOS 开机自启
   doctor             检查环境
+  help               查看统一帮助
+  upgrade            升级到最新版本
 `)
 }
 
@@ -735,7 +851,7 @@ async function cmdSetup(): Promise<void> {
   console.log('  2. 添加权限: im:message, im:message:send_as_bot, im:message.group_msg:readonly, im:message.group_at_msg:readonly, im:chat:readonly, im:resource')
   console.log('  3. 发布应用并把 Bot 加入一个飞书群')
   console.log('  4. 运行 im2cc start && im2cc doctor')
-  console.log('  5. 在飞书群里先发 /help 或 /fl 验证链路')
+  console.log('  5. 在飞书群里先发 /fhelp 或 /fl 验证链路')
   console.log('  6. 在电脑上先进入项目目录后运行 fn <名称>；如需指定工具可用 fn-codex / fn-gemini，再用 /fc <名称> 验证接入')
   console.log('  7. 如需开机自启动，运行 im2cc install-service')
 }
@@ -869,7 +985,7 @@ function cmdDoctor(): void {
 
   console.log('\n首次成功标准:')
   console.log('  1. 先运行 im2cc start')
-  console.log('  2. 在飞书/微信里发 /help 或 /fl')
+  console.log('  2. 在飞书/微信里发 /fhelp 或 /fl')
   console.log('  3. 在电脑上先进入项目目录后用 fn <名称> 创建一个真实对话（或用 fn-codex / fn-gemini）')
   console.log('  4. 在飞书/微信里发 /fc <名称>')
 }

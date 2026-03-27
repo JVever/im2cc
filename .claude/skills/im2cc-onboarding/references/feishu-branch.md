@@ -30,6 +30,6 @@ After writing config:
 
 - `im2cc start`
 - `im2cc doctor`
-- user sends `/help` or `/fl`
+- user sends `/fhelp` or `/fl`
 
 Then continue into first real session validation.

@@ -114,7 +114,7 @@ im2cc start
 im2cc doctor
 ```
 
-告知用户在飞书群或微信中先发送 `/help` 或 `/fl` 测试。这一步只验证消息链路，不代表完整安装已经结束。
+告知用户在飞书群或微信中先发送 `/fhelp` 或 `/fl` 测试。这一步只验证消息链路，不代表完整安装已经结束。
 
 ### 7. 验证一次真实对话流转
 
@@ -158,5 +158,6 @@ launchctl load ~/Library/LaunchAgents/com.im2cc.daemon.plist
 - 如果要指定工具，可以用标准写法 `fn --tool codex|gemini <名称> [项目路径]`，也可以在终端里用 `fn-codex` / `fn-gemini`
 - 离开电脑后在飞书/微信中用 `/fc <名称>` 接入
 - 回到电脑后用 `fc <名称>` 接回
-- 用 `/help` 查看 IM 端命令说明
+- 用 `fhelp` / `/fhelp` 查看帮助
 - 用 `fl` 查看所有对话
+- 以后升级优先直接用 `im2cc upgrade`

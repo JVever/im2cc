@@ -23,8 +23,8 @@ export interface ParsedCommand {
   args: string
 }
 
-// 统一命令名：电脑端和飞书端完全一致
-const COMMANDS = new Set(['fn', 'fc', 'fl', 'fk', 'fs', 'fd', 'mode', 'stop', 'help'])
+// 统一命令名：电脑端和飞书端尽量保持一致；/help 仅作兼容别名保留
+const COMMANDS = new Set(['fn', 'fc', 'fl', 'fk', 'fs', 'fd', 'mode', 'stop', 'help', 'fhelp'])
 
 export function parseCommand(text: string): ParsedCommand | null {
   const trimmed = text.trim()
@@ -49,6 +49,7 @@ export async function handleCommand(
     case 'fd': return handleFd(conversationId)
     case 'mode': return handleMode(cmd.args, conversationId, config)
     case 'stop': return handleStop(conversationId)
+    case 'fhelp':
     case 'help': return handleHelp()
     default: return `未知命令: /${cmd.command}`
   }
@@ -494,29 +495,42 @@ async function handleFs(conversationId: string): Promise<string> {
   return buildSessionStatus(binding)
 }
 
-function handleHelp(): string {
+export function renderUnifiedHelp(): string {
   return [
-    '📖 im2cc IM 端命令',
+    '📖 im2cc 帮助',
     '',
-    '首次使用：先在电脑终端运行 fn <名称> 创建第一个对话，再回到这里发送 /fc <名称>。',
+    '首次使用：先在电脑终端运行 fn <名称> 创建第一个对话，再回到飞书或微信发送 /fc <名称> 接入。',
     '',
-    '/fn                       — 查看可用项目（高级）',
-    '/fn <名称> <项目> [--tool 工具] — 在 IM 中创建新对话（高级）',
-    '/fc [名称]               — 接入已有对话',
-    '/fc <名称> <ID前缀>      — 注册并接入未注册对话',
+    '电脑终端：',
+    'fhelp                    — 查看帮助',
+    'im2cc upgrade            — 升级到最新版本',
+    'fn <名称>                — 用当前目录创建对话',
+    'fn-codex <名称>          — 用当前目录创建 Codex 对话',
+    'fn-gemini <名称>         — 用当前目录创建 Gemini 对话',
+    'fc <名称>                — 把对话接回电脑',
+    'fl                       — 查看所有对话',
+    'fk <名称>                — 终止对话',
+    'fd                       — 断开当前对话',
+    'fs <名称>                — 查看对话状态',
+    '',
+    '飞书 / 微信：',
+    '/fhelp                   — 查看帮助',
+    '/fc <名称>               — 接入已有对话',
     '/fl                      — 列出所有对话',
     '/fk <名称>               — 终止对话',
     '/fd                      — 断开当前对话',
     '/fs                      — 查看当前状态',
-    '',
     '/mode                    — 查看可用模式',
     '/mode <模式别名>         — 切换模式（例如 /mode au）',
     '/stop                    — 中断当前执行',
     '',
-    '终端快捷：fn-codex / fn-gemini（仅电脑终端可用）',
-    '',
     '直接发消息即转给当前接入的 AI 工具',
     '',
-    '发送图片或文件，再发指令即可让 Claude 分析',
+    '飞书支持发送图片或文件；发送后再补一条指令即可让当前接入的 AI 工具分析。',
+    '微信当前以纯文本对话为主。',
   ].join('\n')
+}
+
+function handleHelp(): string {
+  return renderUnifiedHelp()
 }

@@ -7,6 +7,7 @@
 fn()       { im2cc new "$@"; }
 fn-codex() { im2cc new --tool codex "$@"; }
 fn-gemini(){ im2cc new --tool gemini "$@"; }
+fhelp()    { im2cc help; }
 fc()       { im2cc connect "$@"; }
 fl()       { im2cc list; }
 fk()       { im2cc delete "$@"; }

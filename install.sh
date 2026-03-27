@@ -116,6 +116,7 @@ fi
 SHELL_FUNCS='fn()       { im2cc new "$@"; }
 fn-codex() { im2cc new --tool codex "$@"; }
 fn-gemini(){ im2cc new --tool gemini "$@"; }
+fhelp()    { im2cc help; }
 fc()       { im2cc connect "$@"; }
 fl()       { im2cc list; }
 fk()       { im2cc delete "$@"; }
@@ -123,17 +124,17 @@ fd()       { im2cc detach; }
 fs()       { im2cc show "$@"; }'
 
 if [ -n "$SHELL_RC" ]; then
-  if grep -q "im2cc new" "$SHELL_RC" 2>/dev/null && grep -q "fn-codex" "$SHELL_RC" 2>/dev/null && grep -q "fn-gemini" "$SHELL_RC" 2>/dev/null; then
+  if grep -q "im2cc new" "$SHELL_RC" 2>/dev/null && grep -q "fn-codex" "$SHELL_RC" 2>/dev/null && grep -q "fn-gemini" "$SHELL_RC" 2>/dev/null && grep -q "fhelp" "$SHELL_RC" 2>/dev/null; then
     # 新格式已存在（薄包装）
-    ok "终端命令已配置 (fn/fn-codex/fn-gemini/fc/fl/fk/fd/fs)"
+    ok "终端命令已配置 (fhelp/fn/fn-codex/fn-gemini/fc/fl/fk/fd/fs)"
   else
     # 清理旧格式（source 外部文件的方式）
     if grep -q "im2cc" "$SHELL_RC" 2>/dev/null; then
       # Cross-platform sed in-place
       if [[ "$OSTYPE" == "darwin"* ]]; then
-        sed -i '' '/im2cc.*shell-functions/d; /# im2cc/d; /im2cc new/d; /im2cc connect/d; /im2cc list/d; /im2cc delete/d; /im2cc detach/d; /im2cc show/d; /fn-codex/d; /fn-kimi/d; /fn-gemini/d' "$SHELL_RC"
+        sed -i '' '/im2cc.*shell-functions/d; /# im2cc/d; /im2cc new/d; /im2cc help/d; /im2cc connect/d; /im2cc list/d; /im2cc delete/d; /im2cc detach/d; /im2cc show/d; /fn-codex/d; /fn-kimi/d; /fn-gemini/d; /fhelp/d' "$SHELL_RC"
       else
-        sed -i '/im2cc.*shell-functions/d; /# im2cc/d; /im2cc new/d; /im2cc connect/d; /im2cc list/d; /im2cc delete/d; /im2cc detach/d; /im2cc show/d; /fn-codex/d; /fn-kimi/d; /fn-gemini/d' "$SHELL_RC"
+        sed -i '/im2cc.*shell-functions/d; /# im2cc/d; /im2cc new/d; /im2cc help/d; /im2cc connect/d; /im2cc list/d; /im2cc delete/d; /im2cc detach/d; /im2cc show/d; /fn-codex/d; /fn-kimi/d; /fn-gemini/d; /fhelp/d' "$SHELL_RC"
       fi
     fi
     echo "" >> "$SHELL_RC"

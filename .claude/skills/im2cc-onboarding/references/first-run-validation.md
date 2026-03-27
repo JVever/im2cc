@@ -10,7 +10,7 @@
 
 ## Why
 
-- `/help` or `/fl` proves the IM command path works
+- `/fhelp` or `/fl` proves the IM command path works
 - but without a real session, it does not prove session flow or device handoff
 
 ## Required final validation

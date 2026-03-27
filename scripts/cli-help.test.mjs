@@ -18,7 +18,23 @@ test('cli help reflects focused support matrix', () => {
   assert.match(stdout, /IM: 飞书 \/ 微信/)
   assert.match(stdout, /Tool: Claude Code \/ Codex/)
   assert.match(stdout, /Best-effort: Gemini/)
+  assert.match(stdout, /upgrade\s+升级到最新版本/)
   assert.doesNotMatch(stdout, /Telegram/)
   assert.doesNotMatch(stdout, /钉钉/)
   assert.doesNotMatch(stdout, /Kimi/)
+})
+
+test('explicit cli help exposes unified command guide', () => {
+  const stdout = execFileSync('node', [cliPath, 'help'], {
+    cwd: rootDir,
+    encoding: 'utf-8',
+  })
+
+  assert.match(stdout, /📖 im2cc 帮助/)
+  assert.match(stdout, /fhelp\s+— 查看帮助/)
+  assert.match(stdout, /im2cc upgrade\s+— 升级到最新版本/)
+  assert.match(stdout, /fn-codex <名称>/)
+  assert.match(stdout, /\/fhelp\s+— 查看帮助/)
+  assert.match(stdout, /飞书支持发送图片或文件/)
+  assert.doesNotMatch(stdout, /Claude 分析/)
 })
