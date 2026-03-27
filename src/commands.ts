@@ -57,9 +57,15 @@ export async function handleCommand(
 async function handleFn(args: string, conversationId: string, config: Im2ccConfig, transport: TransportType = 'feishu'): Promise<string> {
   if (!args) {
     const projects = listProjects(config)
-    if (projects.length === 0) return `${config.pathWhitelist.join(', ')} 下没有找到项目目录`
+    if (projects.length === 0) {
+      return [
+        '❌ 当前没有可用项目',
+        `请先确认项目位于这些目录下: ${config.pathWhitelist.join(', ')}`,
+        '如果这是第一次使用，更推荐先在电脑终端运行 fn <名称> <项目路径> 创建第一个对话。',
+      ].join('\n')
+    }
     const list = projects.map((p, i) => `  ${i + 1}. ${p}`).join('\n')
-    return `📁 可用项目:\n${list}\n\n用法: /fn <对话名称> [项目名] [--tool ${supportedToolChoices()}]\n例如: /fn auth-refactor im2cc --tool codex\n\n正式支持: Claude Code / Codex\nGemini 为 best-effort`
+    return `📁 可用项目:\n${list}\n\nIM 端创建用法: /fn <对话名称> <项目名> [--tool ${supportedToolChoices()}]\n例如: /fn auth-refactor im2cc --tool codex\n\n首次使用更推荐先在电脑终端运行 fn <名称> 创建第一个对话。`
   }
 
   const existing = getBinding(conversationId)
@@ -81,7 +87,19 @@ async function handleFn(args: string, conversationId: string, config: Im2ccConfi
   if (!isValidSessionName(sessionName)) {
     return `❌ 名称 "${sessionName}" 不合法\n只允许字母、数字、连字符和下划线`
   }
-  const projectHint = argParts[1] || sessionName
+  const projectHint = argParts[1]
+  if (!projectHint) {
+    const projects = listProjects(config)
+    if (projects.length === 0) {
+      return [
+        '❌ 缺少项目名',
+        `当前白名单目录下没有可用项目: ${config.pathWhitelist.join(', ')}`,
+        '如果这是第一次使用，请先在电脑终端运行 fn <名称> <项目路径> 创建第一个对话。',
+      ].join('\n')
+    }
+    const list = projects.map((p, i) => `  ${i + 1}. ${p}`).join('\n')
+    return `请指定项目名。\n\n📁 可用项目:\n${list}\n\n用法: /fn <对话名称> <项目名> [--tool ${supportedToolChoices()}]\n例如: /fn ${sessionName} ${projects[0]}`
+  }
 
   // 检查 driver 是否可用
   if (!hasDriver(tool)) {
@@ -414,7 +432,14 @@ function toolDisplayOrder(tool: string): number {
 
 function handleFl(): string {
   const registered = listRegistered()
-  if (registered.length === 0) return '没有已注册的对话。用 /fn <名称> 创建。'
+  if (registered.length === 0) {
+    return [
+      '还没有已注册的对话。',
+      '首次使用：请先在电脑终端运行 fn <名称> 创建第一个对话。',
+      '如果你用的是 Codex 或 Gemini，也可以运行 fn-codex <名称> 或 fn-gemini <名称>。',
+      '创建完成后，回到这里发送 /fc <名称> 接入。',
+    ].join('\n')
+  }
 
   // 按工具分组，组内按字母序，并保留项目 basename 方便在手机端区分
   const byTool = new Map<string, Array<{ name: string, cwdBase: string }>>()
@@ -471,9 +496,12 @@ async function handleFs(conversationId: string): Promise<string> {
 
 function handleHelp(): string {
   return [
-    '📖 im2cc 命令（电脑/飞书通用）',
+    '📖 im2cc IM 端命令',
     '',
-    '/fn <名称> [项目] [--tool 工具] — 创建新对话（省略项目=当前目录）',
+    '首次使用：先在电脑终端运行 fn <名称> 创建第一个对话，再回到这里发送 /fc <名称>。',
+    '',
+    '/fn                       — 查看可用项目（高级）',
+    '/fn <名称> <项目> [--tool 工具] — 在 IM 中创建新对话（高级）',
     '/fc [名称]               — 接入已有对话',
     '/fc <名称> <ID前缀>      — 注册并接入未注册对话',
     '/fl                      — 列出所有对话',
