@@ -50,6 +50,32 @@ bash install.sh
 
 安装脚本会自动完成：依赖安装、编译、注册全局命令、配置终端快捷命令、安装 Claude Code 的 session 同步 hook。之后仍需要继续做 IM 接入、首次验证和可选的开机自启动。
 
+## 升级已有安装
+
+如果你之前已经通过 `git clone` 安装过 `im2cc`，后续更新通常用这一组命令就够了：
+
+```bash
+cd ~/im2cc
+git pull --ff-only
+npm install
+npm run build
+```
+
+如果这次更新涉及安装脚本、终端快捷命令、Claude hook，或者你懒得判断，可以在 `git pull` 后直接再跑一遍：
+
+```bash
+bash install.sh
+```
+
+如果这台机器当前正在运行 `im2cc` 守护进程，更新代码后还需要重启一次，才能让新版本真正生效：
+
+```bash
+im2cc stop
+im2cc start
+```
+
+你的运行时配置保存在 `~/.im2cc/`，正常升级不会覆盖这部分内容。
+
 ## 连接飞书或微信
 
 ### 飞书
