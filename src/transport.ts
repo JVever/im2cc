@@ -5,7 +5,7 @@
  */
 
 /** 支持的 IM transport 类型 */
-export type TransportType = 'feishu' | 'wechat' | 'telegram' | 'dingtalk'
+export type TransportType = 'feishu' | 'wechat'
 
 /** 统一的入站消息格式 */
 export interface IncomingMessage {
@@ -34,6 +34,4 @@ export interface TransportAdapter {
 export const MSG_LENGTH_LIMIT: Record<TransportType, number> = {
   feishu: 28000,    // 飞书上限约 30KB，留余量
   wechat: 4096,     // 微信单条消息上限较小
-  telegram: 4096,   // Telegram 单条消息 4096 字符
-  dingtalk: 20000,  // 钉钉 Markdown/文本上限约 20KB
 }

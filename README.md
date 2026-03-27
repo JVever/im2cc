@@ -2,57 +2,26 @@
 
 > 离开电脑，不离开你的 AI coding tool
 
-im2cc 让你在手机上通过飞书或微信，远程操控电脑上正在运行的 AI coding tool。回到电脑后，对话无缝接续，就像你从未离开过。
+im2cc 让你在手机上通过飞书或微信，继续操控电脑上正在运行的 `Claude Code`、`Codex` 或 `Gemini CLI`。不是远程桌面，不是复制一份聊天记录，而是接着同一个本地 session 往下做。
 
-> 当前支持：`Claude Code` / `Codex`
->
-> Best-effort：`Gemini CLI`
->
-> 微信支持纯文本对话；文件和图片目前仍以飞书链路为主。`/fc <新名称> <ID前缀>` 自动发现未注册本地会话目前仅支持 Claude Code，会话一旦通过 im2cc 创建并注册，四种工具都支持完整流转。
+## 30 秒看懂
 
-## 它解决什么问题？
-
-你在电脑上用 Claude、Codex 或 Gemini 做事，做到一半要出门。你有两个选择：
-
-1. **关掉对话**——回来后从头建立上下文，之前的思路全断了
-2. **用 im2cc**——拿出手机继续和同一个 AI 对话，它记得你们之前所有的内容
-
-## 使用场景
-
-**通勤路上启动任务**
-> 地铁上用手机告诉 AI："把昨天的 PR review 意见都改了"，到公司时打开电脑，所有改动已经在那里等你。
-
-**会议间隙看进度**
-> AI 正在跑一个大重构，开会时掏出手机看一眼状态，还在执行中，放心继续开会。
-
-**睡前安排第二天的活**
-> 躺在床上给 AI 发几个任务，第二天早上打开电脑直接 review 结果。
-
-**在外面突然有想法**
-> 出门遛弯时想到一个方案优化思路，掏出手机告诉 AI 去调研、写方案，回家后打开电脑看结果。
-
-**临时处理紧急问题**
-> 周末在外面，线上出了问题。手机上接入对应项目，让 AI 帮你排查定位。
-
-## 核心优势
-
-### 飞书、微信、电脑——三端无缝流转
-
-在飞书群里给 AI 布置任务，切到微信看进度，回到电脑接着改代码。无论你在哪个端操作，工具看到的都是**同一个对话**，它记得之前所有的上下文、读过的文件、做过的改动。不是消息同步，不是对话复制，是真正的同一个 session。
-
-### 手机上并行指挥多个项目
-
-你的电脑上可以同时跑多个 AI coding tool 对话，各自负责不同的项目。im2cc 让你在手机上也能同时管理它们，后端群让 Claude 改 API，前端群让 Codex 调样式，另一个会话让 Gemini 查资料。多条线并行推进，互不干扰。
-
-### 切换时自动带上上下文
-
-每次从一个端切到另一个端时，im2cc 会自动回顾最近的对话内容并展示给你。在手机上接入一个对话，立刻能看到刚才在电脑上和 AI 聊了什么、做了什么；回到电脑，手机上的操作结果也都在。不需要翻记录、不需要手动同步，切过去就能直接继续。
+- **同一个会话继续做**：出门后在手机上接入，回到电脑再接回，不丢上下文。
+- **多个项目并行推进**：电脑上可以同时跑多个 AI 会话，手机上用 `/fl` 和 `/fc` 在不同项目之间切换。
+- **切换时自动带上最近上下文**：接入会话后，先看到最近在做什么，再继续给 AI 下指令。
+- **完全本地运行**：代码、对话和执行都留在你自己的电脑上，飞书和微信只负责消息传递。
 
 ## 快速开始
 
+最快的闭环只有三步：
+
+1. 安装 `im2cc`
+2. 接通飞书或微信
+3. 创建一个真实对话，并在手机上接入
+
 ### 方式一：让 AI coding tool 帮你安装（推荐）
 
-如果你已经在用 Claude Code、Codex 或 Gemini CLI，把下面这段话原样发给它：
+如果你已经在用 `Claude Code`、`Codex` 或 `Gemini CLI`，把下面这段话原样发给它：
 
 ```text
 请帮我安装并配置 im2cc，让我可以通过飞书或微信在手机上远程操控这台电脑上的 AI coding tool。这个仓库是公开仓库，请优先使用普通 git HTTPS clone，不要依赖 gh CLI 登录，也不要依赖需要 GitHub 认证的 API / MCP / 集成。请先执行：
@@ -67,11 +36,11 @@ curl -L https://codeload.github.com/JVever/im2cc/tar.gz/refs/heads/master | tar 
 如果这两种方式都失败，再排查 github.com 网络连通性、代理、文件系统权限或公司网络策略，不要默认要求我登录 gh。然后进入 ~/im2cc，阅读 INSTALL.md、README.md 和仓库内的 agent/onboarding instructions，继续完成全部安装、IM 接入、首次验证和开机自启动配置。只有在必须由我操作时再问我。
 ```
 
-AI coding tool 应该自动处理：依赖安装、编译项目、配置环境、接入飞书/微信、启动守护进程、完成首次验证。你只需要在必须的人机交互节点配合一下，比如登录飞书、允许浏览器接管、微信扫码、或在手机端发几条验证命令。
+AI coding tool 应该自动处理：依赖安装、编译项目、配置环境、接入飞书/微信、启动守护进程、完成首次验证。你只需要在必须的人机交互节点配合一下，比如登录飞书、允许浏览器接管、微信扫码，或在手机端发几条验证命令。
 
 ### 方式二：手动安装
 
-如果你更习惯自己动手，确保电脑上已有 [Node.js](https://nodejs.org/)（>= 20）、[tmux](https://github.com/tmux/tmux)，并至少安装一个受支持的 CLI： [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、`codex`、`gemini`。对应 CLI 也需要先完成各自的登录/鉴权，然后：
+如果你更习惯自己动手，确保电脑上已有 [Node.js](https://nodejs.org/)（>= 20）、[tmux](https://github.com/tmux/tmux)，并至少安装一个受支持的 CLI：[Claude Code](https://docs.anthropic.com/en/docs/claude-code)、`codex`、`gemini`。对应 CLI 也需要先完成各自的登录/鉴权，然后执行：
 
 ```bash
 git clone https://github.com/JVever/im2cc.git ~/im2cc
@@ -79,18 +48,20 @@ cd ~/im2cc
 bash install.sh
 ```
 
-安装脚本会自动完成：依赖安装、编译、注册全局命令、配置终端快捷命令、安装 session 同步 hook。如有缺失的依赖，会告诉你如何安装。之后仍需要继续做 IM 接入、首次验证和可选的开机自启动。
+安装脚本会自动完成：依赖安装、编译、注册全局命令、配置终端快捷命令、安装 Claude Code 的 session 同步 hook。之后仍需要继续做 IM 接入、首次验证和可选的开机自启动。
 
-### 连接飞书或微信
+## 连接飞书或微信
 
-**飞书**（需要先在[飞书开放平台](https://open.feishu.cn/)创建一个自建应用 Bot）：
+### 飞书
+
+需要先在 [飞书开放平台](https://open.feishu.cn/) 创建一个自建应用 Bot，然后：
 
 ```bash
-im2cc setup    # 输入飞书 App ID 和 App Secret
-im2cc start    # 启动守护进程
+im2cc setup
+im2cc start
 ```
 
-把 Bot 加入飞书群后，先在群里发 `/help` 或 `/fl` 验证消息链路；再在电脑上创建一个真实对话，用 `/fc <名称>` 验证完整流转。
+把 Bot 加入飞书群后，先在群里发 `/help` 或 `/fl` 验证消息链路；再按下面的“第一次成功”完成一次真实会话接入。
 
 <details>
 <summary>飞书 App 需要的权限（6 个）</summary>
@@ -106,42 +77,48 @@ im2cc start    # 启动守护进程
 
 </details>
 
-**微信**（需要微信已开启 ClawBot 插件：设置 → 插件 → ClawBot）：
+### 微信
+
+需要微信已开启 ClawBot 插件：`设置 → 插件 → ClawBot`，然后：
 
 ```bash
-im2cc wechat login    # 终端显示 QR 码，用微信扫码绑定
-im2cc start           # 启动守护进程（如已在运行则 im2cc stop 后再 start）
+im2cc wechat login
+im2cc start
 ```
 
-微信目前支持纯文本对话。文件和图片传输功能正在开发中，当前仅飞书可用。接通后同样建议先发 `/help` 或 `/fl`，再完成一次真实对话接入。
+微信接通后，同样建议先发 `/help` 或 `/fl` 验证链路，再完成一次真实会话接入。
 
-### 第一次验证与开始使用
+## 第一次成功
 
 完成安装和 IM 接入后，先做一次真实验证。
 
-先进入你正在处理的项目目录，再创建一个对话：
+先进入你正在处理的项目目录，然后按你正在使用的工具，任选一种方式创建对话：
 
 ```bash
 cd ~/Code/my-project
 fn myproject
+# 或
 fn-codex myproject
+# 或
+fn-gemini myproject
 ```
 
-如果你不在项目目录里，也可以显式传路径：
+如果你当前不在项目目录里，也可以显式传路径：
 
 ```bash
 fn myproject ~/Code/my-project
-fn-codex myproject ~/Code/my-project
+fn --tool codex myproject ~/Code/my-project
+fn --tool gemini myproject ~/Code/my-project
 ```
 
-然后在飞书群或微信中先看对话列表，再接入这个对话：
+然后在飞书群或微信中执行：
 
-```
+```text
 /fl
 /fc myproject
 ```
 
-回到电脑，把对话接回来：
+回到电脑后，再把对话接回来：
 
 ```bash
 fc myproject
@@ -154,15 +131,44 @@ im2cc install-service
 launchctl load ~/Library/LaunchAgents/com.im2cc.daemon.plist
 ```
 
-遇到问题？运行 `im2cc doctor` 检查环境状态。
+遇到问题时，先运行：
+
+```bash
+im2cc doctor
+```
+
+## 支持矩阵
+
+### Tool
+
+| Tool | 状态 | 说明 |
+|------|------|------|
+| `Claude Code` | 正式支持 | 创建、恢复、接入、本地历史会话发现 |
+| `Codex` | 正式支持 | 通过 `im2cc` 创建并注册的会话可完整流转 |
+| `Gemini CLI` | Best-effort | 通过 `im2cc` 创建并注册的会话可完整流转 |
+
+### IM 渠道
+
+| 渠道 | 状态 | 说明 |
+|------|------|------|
+| 飞书 | 正式支持 | 文本、文件、图片 |
+| 微信 | 正式支持 | 当前以纯文本对话为主，文件和图片链路以飞书为主 |
+
+### 其他能力
+
+| 能力 | 当前状态 | 说明 |
+|------|----------|------|
+| 未注册本地历史会话自动发现 | `Claude Code` | 通过 `/fc <新名称> <ID前缀>` 注册并接入 |
+| `fn-codex` / `fn-gemini` 终端快捷命令 | 可用 | 仅电脑终端可用，IM 里仍使用 `/fn --tool ...` |
+| Claude 会话漂移同步 hook | 可用 | 仅对 `Claude Code` 安装 |
 
 ## 命令速查
 
-所有命令在电脑终端和 IM 中通用。命名规则：`f` 代表"流转"，后面一个字母表示操作——`n`ew 创建、`c`onnect 接入、`l`ist 列出、`k`ill 终止、`d`isconnect 断开、`s`tatus 状态。
+核心流转命令在电脑终端和 IM 中基本对应；少数命令只在某一端可用。
 
 | 命令 | 作用 | 电脑 | 飞书/微信 |
 |------|------|------|-----------|
-| **fn** `[--tool 工具] <名称> [路径]` | 创建新对话（省略路径时默认当前目录） | `fn auth` 或 `fn --tool codex auth` | `/fn auth` 或 `/fn auth auth-service --tool codex` |
+| **fn** `[--tool 工具] <名称> [路径]` | 创建新对话 | `fn auth` 或 `fn --tool codex auth` | `/fn auth auth-service` 或 `/fn auth auth-service --tool codex` |
 | **fc** `<名称>` | 接入已有对话 | `fc auth` | `/fc auth` |
 | **fl** | 列出所有对话 | `fl` | `/fl` |
 | **fk** `<名称>` | 终止对话 | `fk auth` | `/fk auth` |
@@ -173,7 +179,9 @@ launchctl load ~/Library/LaunchAgents/com.im2cc.daemon.plist
 | `/stop` | 中断执行中的任务 | — | `/stop` |
 
 说明：
-- `fn` 的 `[路径]` 是可选的；如果你已经在项目目录里，直接 `fn <名称>` 就行。
+
+- 在电脑终端里，`fn` 的 `[路径]` 是可选的；如果你已经在项目目录里，直接 `fn <名称>` 就行。
+- 在飞书/微信里，建议显式写项目名：`/fn <名称> <项目名> [--tool ...]`。
 - 终端里提供两个便捷别名：`fn-codex <名称> [路径]`、`fn-gemini <名称> [路径]`。
 - 标准写法仍然是 `fn --tool codex|gemini <名称> [路径]`；在 IM 中请继续使用 `/fn ... --tool codex|gemini`，不要写 `/fn-codex`。
 
@@ -222,7 +230,7 @@ im2cc wechat logout      # 解绑微信
 
 ## 工作原理
 
-```
+```text
 ┌──────────┐                    ┌──────────────┐    spawn     ┌─────────────┐
 │ 飞书群聊  │◄── REST 轮询 ──────►│              │ ──────────► │ AI Coding   │
 │          │                    │ im2cc 守护进程 │             │ Tool CLI    │
@@ -233,7 +241,7 @@ im2cc wechat logout      # 解绑微信
 
 im2cc 在你的电脑上运行一个轻量守护进程，它同时连接飞书和微信，把你的消息转发给本地 CLI，再把回复发回手机。当前正式支持 `Claude Code`、`Codex`，并提供 `Gemini CLI` 的 best-effort 支持。它直接操控 CLI，而不是走 Agent SDK 中转，所以工具原生的读写文件、执行命令、调用 MCP 等能力可以直接复用。
 
-补充说明：当前“扫描并导入未注册的本地历史会话”仍主要面向 Claude Code；`Codex/Gemini` 的完整支持路径是通过 `im2cc new --tool ...` 或 IM 里的 `/fn --tool ...` 创建并注册后再流转。
+补充说明：当前“扫描并导入未注册的本地历史会话”主要面向 `Claude Code`；`Codex/Gemini` 的完整支持路径是通过 `im2cc new --tool ...` 或 IM 里的 `/fn --tool ...` 创建并注册后再流转。
 
 ## 许可证
 

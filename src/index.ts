@@ -7,7 +7,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { loadConfig, getPidFile, getDaemonLockDir, loadWeChatAccount, loadTelegramBotToken, loadDingTalkConfig } from './config.js'
+import { loadConfig, getPidFile, getDaemonLockDir, loadWeChatAccount } from './config.js'
 import { isUserAllowed } from './security.js'
 import { isDuplicate, listActiveBindings, getBinding, archiveBinding } from './session.js'
 import { parseCommand, handleCommand } from './commands.js'
@@ -405,34 +405,6 @@ export async function startDaemon(): Promise<void> {
       log('[transport] 微信已启动')
     } catch (err) {
       error(`[transport] 微信启动失败: ${err}`)
-    }
-  }
-
-  // Telegram（如果已配置）
-  const tgToken = loadTelegramBotToken()
-  if (tgToken) {
-    try {
-      const { TelegramAdapter } = await import('./telegram.js')
-      const tg = new TelegramAdapter({ botToken: tgToken })
-      adapters.set('telegram', tg)
-      await tg.start(handleMessage)
-      log('[transport] Telegram 已启动')
-    } catch (err) {
-      error(`[transport] Telegram 启动失败: ${err}`)
-    }
-  }
-
-  // 钉钉（如果已配置）
-  const dtConfig = loadDingTalkConfig()
-  if (dtConfig) {
-    try {
-      const { DingTalkAdapter } = await import('./dingtalk.js')
-      const dt = new DingTalkAdapter(dtConfig)
-      adapters.set('dingtalk', dt)
-      await dt.start(handleMessage)
-      log('[transport] 钉钉已启动')
-    } catch (err) {
-      error(`[transport] 钉钉启动失败: ${err}`)
     }
   }
 

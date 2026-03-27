@@ -7,7 +7,7 @@ im2cc 核心业务逻辑：IM 消息接收 → 命令路由 → 本地 AI coding
 ## 文件清单
 - index.ts：主入口，初始化各模块、启动飞书连接、消息路由、崩溃恢复
 - daemon-process.ts：守护进程进程识别与 PID/锁元数据校验，供 CLI 和 daemon 共享
-- config.ts：配置加载 (~/.im2cc/config.json)
+- config.ts：配置加载 (~/.im2cc/config.json, ~/.im2cc/wechat-account.json)
 - support-policy.ts：正式支持 / best-effort 支持矩阵常量与公共文案
 - security.ts：用户白名单检查、路径验证与白名单
 - mode-policy.ts：模式注册表 — 每个工具的可用模式、中文描述、CLI 参数映射、默认模式、旧名迁移

@@ -30,7 +30,7 @@ input=$(cat)
 im2cc_name="${tmux_name#im2cc-}"
 # 新格式 im2cc-{tool}-{name}: 去掉 tool 前缀
 case "$im2cc_name" in
-  claude-*|codex-*|kimi-*|gemini-*) im2cc_name="${im2cc_name#*-}" ;;
+  claude-*|codex-*|gemini-*) im2cc_name="${im2cc_name#*-}" ;;
 esac
 registry="$HOME/.im2cc/data/registry.json"
 if [[ ! -f "$registry" ]]; then
