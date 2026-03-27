@@ -59,19 +59,6 @@ function inspectLocalDaemonState(): DaemonState {
   return { kind: 'stopped' }
 }
 
-function inspectDaemonState(): DaemonState {
-  const localState = inspectLocalDaemonState()
-  const livePids = listDaemonProcessPids(daemonMainModulePath())
-  if (livePids.length > 0) {
-    if (localState.kind === 'running') {
-      const merged = [...new Set([...localState.pids, ...livePids])]
-      return { kind: 'running', pids: merged }
-    }
-    return { kind: 'running', pids: livePids }
-  }
-  return localState
-}
-
 function cleanupStaleDaemonState(): void {
   try { fs.unlinkSync(getPidFile()) } catch {}
   try { fs.rmSync(getDaemonLockDir(), { recursive: true, force: true }) } catch {}
@@ -236,10 +223,9 @@ async function cmdStart(): Promise<void> {
     process.exit(1)
   }
 
-  const state = inspectDaemonState()
+  const state = inspectLocalDaemonState()
   if (state.kind === 'running') {
-    const suffix = state.pids.length > 1 ? '，检测到重复实例' : ''
-    console.log(`守护进程已在运行 (PID: ${state.pids.join(', ')})${suffix}`)
+    console.log(`守护进程已在运行 (PID: ${state.pids.join(', ')})`)
     return
   }
   if (state.kind === 'starting') {
@@ -262,7 +248,7 @@ async function cmdStart(): Promise<void> {
 
   let runningPids: number[] = []
   for (let i = 0; i < 20; i++) {
-    const current = inspectDaemonState()
+    const current = inspectLocalDaemonState()
     if (current.kind === 'running') {
       runningPids = current.pids
       break
@@ -276,8 +262,7 @@ async function cmdStart(): Promise<void> {
   child.disconnect()
 
   if (runningPids.length > 0) {
-    const suffix = runningPids.length > 1 ? '，但检测到重复实例，请先执行 im2cc stop 清理旧进程' : ''
-    console.log(`✅ 守护进程已启动 (PID: ${runningPids.join(', ')})${suffix}`)
+    console.log(`✅ 守护进程已启动 (PID: ${runningPids.join(', ')})`)
     console.log(`   日志: im2cc logs`)
     return
   }
@@ -287,30 +272,43 @@ async function cmdStart(): Promise<void> {
 }
 
 function cmdStop(): void {
-  // 使用 killAllDaemonProcesses 确保杀死所有守护进程（包括 pgrep 发现的僵尸进程）
-  const killedPids = killAllDaemonProcesses(daemonMainModulePath(), process.pid)
+  const state = inspectLocalDaemonState()
+  if (state.kind === 'running') {
+    const killedPids: number[] = []
+    for (const pid of state.pids) {
+      try {
+        process.kill(pid, 'SIGTERM')
+        killedPids.push(pid)
+      } catch {}
+    }
 
-  if (killedPids.length > 0) {
-    // 提示活跃绑定状态
     const bindings = listActiveBindings()
     if (bindings.length > 0) {
       console.log(`⚠️ 当前有 ${bindings.length} 个活跃绑定，执行中的任务结果将在下次启动时恢复`)
     }
-    console.log(`✅ 已停止守护进程 (PID: ${killedPids.join(', ')})`)
-  } else {
-    console.log('守护进程未运行')
+
+    cleanupStaleDaemonState()
+
+    if (killedPids.length > 0) {
+      console.log(`✅ 已停止守护进程 (PID: ${killedPids.join(', ')})`)
+      return
+    }
   }
 
-  // 清理残留状态文件
-  cleanupStaleDaemonState()
+  if (state.kind === 'starting' || state.kind === 'stale') {
+    cleanupStaleDaemonState()
+    console.log('⬤ 守护进程未运行 (已清理残留状态)')
+    return
+  }
+
+  console.log('守护进程未运行')
 }
 
 function cmdStatus(): void {
-  const state = inspectDaemonState()
+  const state = inspectLocalDaemonState()
   if (state.kind === 'running') {
     const bindings = listActiveBindings()
-    const duplicateNote = state.pids.length > 1 ? ' [检测到重复实例]' : ''
-    console.log(`🟢 守护进程运行中 (PID: ${state.pids.join(', ')})${duplicateNote}`)
+    console.log(`🟢 守护进程运行中 (PID: ${state.pids.join(', ')})`)
     console.log(`   活跃绑定: ${bindings.length}`)
     return
   }
@@ -737,7 +735,7 @@ async function cmdSetup(): Promise<void> {
   console.log('  3. 发布应用并把 Bot 加入一个飞书群')
   console.log('  4. 运行 im2cc start && im2cc doctor')
   console.log('  5. 在飞书群里先发 /help 或 /fl 验证链路')
-  console.log('  6. 在电脑上用 fn <名称> <项目路径> 创建一个真实对话，再用 /fc <名称> 验证接入')
+  console.log('  6. 在电脑上先进入项目目录后运行 fn <名称>；如需指定工具可用 fn-codex / fn-gemini，再用 /fc <名称> 验证接入')
   console.log('  7. 如需开机自启动，运行 im2cc install-service')
 }
 
@@ -823,7 +821,7 @@ function cmdDoctor(): void {
 
   // 注册表 / 活跃绑定
   const registered = listRegistered()
-  console.log(`已注册对话: ${registered.length}${registered.length === 0 ? ' (先用 fn <名称> <项目路径> 创建)' : ''}`)
+  console.log(`已注册对话: ${registered.length}${registered.length === 0 ? ' (先进入项目目录后用 fn <名称> 创建)' : ''}`)
   const bindings = listActiveBindings()
   console.log(`活跃绑定: ${bindings.length}`)
 
@@ -868,7 +866,7 @@ function cmdDoctor(): void {
   console.log('\n首次成功标准:')
   console.log('  1. 先运行 im2cc start')
   console.log('  2. 在飞书/微信里发 /help 或 /fl')
-  console.log('  3. 在电脑上用 fn <名称> <项目路径> 创建一个真实对话')
+  console.log('  3. 在电脑上先进入项目目录后用 fn <名称> 创建一个真实对话（或用 fn-codex / fn-gemini）')
   console.log('  4. 在飞书/微信里发 /fc <名称>')
 }
 

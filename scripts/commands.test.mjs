@@ -54,6 +54,8 @@ test('help and mode list surface aliases for mobile input', async () => {
   assert.match(helpOutput, /\/mode\s+— 查看可用模式/)
   assert.match(helpOutput, /\/mode <模式别名>/)
   assert.match(helpOutput, /例如 \/mode au/)
+  assert.match(helpOutput, /fn-codex/)
+  assert.match(helpOutput, /fn-gemini/)
 })
 
 test('mode aliases switch current session mode and default mode', async () => {

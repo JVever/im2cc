@@ -35,7 +35,8 @@ A successful onboarding requires:
 
 - `im2cc doctor` passes basic checks
 - the IM side responds to `/help` or `/fl`
-- the user creates one real session via `fn <name> <path>`
+- the user creates one real session via `fn <name>` when already inside the project directory, or `fn <name> <path>` when not
+- terminal convenience aliases `fn-codex` and `fn-gemini` are acceptable shortcuts on the computer side
 - the user can see that session from IM and attach with `/fc <name>`
 
 Only after this flow succeeds should onboarding be considered complete.

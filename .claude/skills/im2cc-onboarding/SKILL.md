@@ -107,7 +107,8 @@ This validates message ingress and reply, but it does not yet prove real session
 
 Before declaring success:
 
-- create one real session on the computer, for example `fn demo <project-path>`
+- prefer asking the user (or the agent itself) to `cd` into the target project first, then create one real session with `fn demo`
+- only pass an explicit path when the current directory is not the target project
 - ask the user to run `/fl`
 - ask the user to run `/fc demo`
 

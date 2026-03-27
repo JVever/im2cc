@@ -5,6 +5,8 @@
 # 更新项目后 npm run build 即可生效，无需重新 source
 
 fn()       { im2cc new "$@"; }
+fn-codex() { im2cc new --tool codex "$@"; }
+fn-gemini(){ im2cc new --tool gemini "$@"; }
 fc()       { im2cc connect "$@"; }
 fl()       { im2cc list; }
 fk()       { im2cc delete "$@"; }

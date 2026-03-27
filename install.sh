@@ -63,7 +63,7 @@ else
   echo "   安装: https://docs.anthropic.com/en/docs/claude-code"
 fi
 
-for tool in codex kimi gemini; do
+for tool in codex gemini; do
   if command -v "$tool" &>/dev/null; then
     TOOL_VER=$("$tool" --version 2>/dev/null || echo "未知版本")
     ok "$tool CLI ($TOOL_VER)"
@@ -76,7 +76,7 @@ done
 echo ""
 
 if [ "$AVAILABLE_TOOLS" -eq 0 ]; then
-  fail "至少需要安装一个受支持的 AI coding tool CLI（claude / codex / kimi / gemini）"
+  fail "至少需要安装一个受支持的 AI coding tool CLI（claude / codex / gemini）"
   exit 1
 fi
 
@@ -114,6 +114,8 @@ elif [ -f "$HOME/.bashrc" ]; then
 fi
 
 SHELL_FUNCS='fn()       { im2cc new "$@"; }
+fn-codex() { im2cc new --tool codex "$@"; }
+fn-gemini(){ im2cc new --tool gemini "$@"; }
 fc()       { im2cc connect "$@"; }
 fl()       { im2cc list; }
 fk()       { im2cc delete "$@"; }
@@ -121,9 +123,9 @@ fd()       { im2cc detach; }
 fs()       { im2cc show "$@"; }'
 
 if [ -n "$SHELL_RC" ]; then
-  if grep -q "im2cc new" "$SHELL_RC" 2>/dev/null; then
+  if grep -q "im2cc new" "$SHELL_RC" 2>/dev/null && grep -q "fn-codex" "$SHELL_RC" 2>/dev/null && grep -q "fn-gemini" "$SHELL_RC" 2>/dev/null; then
     # 新格式已存在（薄包装）
-    ok "终端命令已配置 (fn/fc/fl/fk/fd/fs)"
+    ok "终端命令已配置 (fn/fn-codex/fn-gemini/fc/fl/fk/fd/fs)"
   else
     # 清理旧格式（source 外部文件的方式）
     if grep -q "im2cc" "$SHELL_RC" 2>/dev/null; then

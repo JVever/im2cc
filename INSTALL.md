@@ -1,6 +1,6 @@
 # im2cc 安装指南（AI coding tool 执行用）
 
-> 本文件供 Claude Code / Codex / Kimi Code / Gemini CLI 读取并自动执行安装。用户不需要手动操作本文件中的步骤。完成仓库 checkout 后，也应继续读取仓库根目录的 `AGENTS.md` 和 repo-local onboarding instructions。
+> 本文件供 Claude Code / Codex / Gemini CLI 读取并自动执行安装。用户不需要手动操作本文件中的步骤。完成仓库 checkout 后，也应继续读取仓库根目录的 `AGENTS.md` 和 repo-local onboarding instructions。
 
 ## 安装步骤
 
@@ -12,7 +12,7 @@
 
 - **Node.js >= 20**：运行 `node -v` 检查。如果未安装或版本过低，macOS 用 `brew install node`，Linux 用 `curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs`，或使用 nvm。
 - **tmux**：运行 `tmux -V` 检查。如果未安装，macOS 用 `brew install tmux`，Linux 用 `sudo apt install tmux`。
-- **至少一个 AI coding tool CLI**：`claude` / `codex` / `kimi` / `gemini` 至少安装一个；如果用户计划完整使用多工具流转，则四个都建议检查。安装后确认对应 CLI 已登录或完成鉴权。
+- **至少一个 AI coding tool CLI**：`claude` / `codex` / `gemini` 至少安装一个；如果用户计划完整使用多工具流转，则三者都建议检查。安装后确认对应 CLI 已登录或完成鉴权。
 
 如果 macOS 上 `brew` 不可用，先安装 Homebrew：`/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
 
@@ -34,17 +34,20 @@ npm link          # 如果权限不够，用 sudo npm link
 ```bash
 # im2cc 命令
 fn()       { im2cc new "$@"; }
+fn-codex() { im2cc new --tool codex "$@"; }
+fn-gemini(){ im2cc new --tool gemini "$@"; }
 fc()       { im2cc connect "$@"; }
 fl()       { im2cc list; }
 fk()       { im2cc delete "$@"; }
 fd()       { im2cc detach; }
 fs()       { im2cc show "$@"; }
-fn-codex() { im2cc new --tool codex "$@"; }
-fn-kimi()  { im2cc new --tool kimi "$@"; }
-fn-gemini(){ im2cc new --tool gemini "$@"; }
 ```
 
 **注意**：添加前先检查是否已经存在 `im2cc new` 的行，避免重复。如果存在旧格式（`source` 外部文件），先删除旧行再添加新格式。
+其中：
+- `fn-codex <名称> [路径]` 等价于 `fn --tool codex <名称> [路径]`
+- `fn-gemini <名称> [路径]` 等价于 `fn --tool gemini <名称> [路径]`
+- 这些只是终端快捷别名，IM 中仍然要用 `/fn ... --tool codex|gemini`
 
 ### 4. 安装 Session 同步 Hook
 
@@ -95,10 +98,17 @@ im2cc doctor
 
 ### 7. 验证一次真实对话流转
 
-在电脑端创建一个真实对话，例如：
+在电脑端创建一个真实对话。优先让用户先 `cd` 到目标项目目录，再执行：
+
+```bash
+fn demo
+```
+
+如果当前目录不是目标项目目录，再显式传路径：
 
 ```bash
 fn demo <项目路径>
+fn-codex demo <项目路径>
 ```
 
 然后让用户在飞书群或微信中执行：
@@ -124,8 +134,8 @@ launchctl load ~/Library/LaunchAgents/com.im2cc.daemon.plist
 ### 9. 教用户基本操作
 
 安装完成后，简要告诉用户：
-- 在电脑上用 `fn <名称> <项目路径>` 创建对话
-- 如果要指定工具，用 `fn --tool codex|kimi|gemini <名称> <项目路径>`
+- 在电脑上优先进入项目目录后运行 `fn <名称>`；只有不在项目目录时才写 `fn <名称> <项目路径>`
+- 如果要指定工具，可以用标准写法 `fn --tool codex|gemini <名称> [项目路径]`，也可以在终端里用 `fn-codex` / `fn-gemini`
 - 离开电脑后在飞书/微信中用 `/fc <名称>` 接入
 - 回到电脑后用 `fc <名称>` 接回
 - 用 `/help` 查看 IM 端命令说明

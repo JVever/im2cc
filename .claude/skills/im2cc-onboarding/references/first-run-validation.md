@@ -16,7 +16,10 @@
 ## Required final validation
 
 1. Create one real session on the computer:
-   - `fn demo <project-path>`
+   - if already inside the project directory: `fn demo`
+   - terminal convenience aliases also work: `fn-codex demo`, `fn-gemini demo`
+   - otherwise: `fn demo <project-path>`
+   - if the user wants Codex or Gemini, use `fn --tool codex demo [project-path]` or `fn --tool gemini demo [project-path]`
 2. Ask the user to run `/fl` from IM.
 3. Ask the user to run `/fc demo` from IM.
 
