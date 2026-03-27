@@ -53,6 +53,7 @@ npm link          # 如果权限不够，用 sudo npm link
 
 ```bash
 # im2cc 命令
+fhelp()    { im2cc help; }
 fn()       { im2cc new "$@"; }
 fn-codex() { im2cc new --tool codex "$@"; }
 fn-gemini(){ im2cc new --tool gemini "$@"; }
@@ -158,6 +159,6 @@ launchctl load ~/Library/LaunchAgents/com.im2cc.daemon.plist
 - 如果要指定工具，可以用标准写法 `fn --tool codex|gemini <名称> [项目路径]`，也可以在终端里用 `fn-codex` / `fn-gemini`
 - 离开电脑后在飞书/微信中用 `/fc <名称>` 接入
 - 回到电脑后用 `fc <名称>` 接回
-- 用 `fhelp` / `/fhelp` 查看帮助
+- 在电脑终端用 `im2cc help` 或 `fhelp` 查看帮助，在飞书/微信里用 `/fhelp`
 - 用 `fl` 查看所有对话
 - 以后升级优先直接用 `im2cc upgrade`
