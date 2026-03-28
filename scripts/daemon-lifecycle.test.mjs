@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
@@ -21,11 +22,67 @@ function pidFileFor(homeDir) {
   return path.join(homeDir, '.im2cc', 'daemon.pid')
 }
 
+function testEnv(homeDir) {
+  const env = { ...process.env, HOME: homeDir }
+  delete env.NODE_USE_ENV_PROXY
+  delete env.NODE_OPTIONS
+  delete env.HTTP_PROXY
+  delete env.HTTPS_PROXY
+  delete env.http_proxy
+  delete env.https_proxy
+  delete env.ALL_PROXY
+  delete env.all_proxy
+  delete env.NO_PROXY
+  delete env.no_proxy
+  return env
+}
+
 function runCli(homeDir, args) {
   return spawnSync(process.execPath, [cliPath, ...args], {
-    env: { ...process.env, HOME: homeDir },
+    env: testEnv(homeDir),
     encoding: 'utf-8',
   })
+}
+
+function writeWeChatAccount(homeDir, baseUrl) {
+  fs.writeFileSync(path.join(homeDir, '.im2cc', 'wechat-account.json'), JSON.stringify({
+    botToken: 'test-token',
+    baseUrl,
+    ilinkBotId: 'bot-id',
+    ilinkUserId: 'user-id',
+    savedAt: new Date().toISOString(),
+    lastOkAt: '',
+    syncBuf: '',
+  }, null, 2))
+}
+
+async function startWechatStubServer() {
+  const server = http.createServer((req, res) => {
+    if (req.method === 'POST' && req.url === '/ilink/bot/getupdates') {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ get_updates_buf: 'cursor-1', msgs: [] }))
+      return
+    }
+
+    res.writeHead(404, { 'Content-Type': 'text/plain' })
+    res.end('not found')
+  })
+
+  await new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
+
+  const address = server.address()
+  if (!address || typeof address === 'string') {
+    server.close()
+    throw new Error('failed to bind stub server')
+  }
+
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise(resolve => server.close(() => resolve())),
+  }
 }
 
 function waitForProcessExit(child, timeoutMs = 5_000) {
@@ -53,6 +110,21 @@ function spawnIdleNode(args, options = {}) {
 
 function assertAlive(pid) {
   process.kill(pid, 0)
+}
+
+async function waitForAlive(pid, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    try {
+      assertAlive(pid)
+      return
+    } catch (err) {
+      if (err?.code !== 'ESRCH') throw err
+    }
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+
+  assertAlive(pid)
 }
 
 function terminateProcess(child) {
@@ -100,13 +172,10 @@ test('killAllDaemonProcesses kills zombie processes on startup', async () => {
   const zombie1 = spawnIdleNode(['-e', `process.title='${DAEMON_PROCESS_TITLE}'; setInterval(()=>{},1000)`])
   const zombie2 = spawnIdleNode(['-e', `process.title='${DAEMON_PROCESS_TITLE}'; setInterval(()=>{},1000)`])
 
-  // 等待进程启动并设置 title
-  await new Promise(r => setTimeout(r, 500))
-
   try {
-    // 验证两个僵尸都在运行
-    assertAlive(zombie1.pid)
-    assertAlive(zombie2.pid)
+    // 等待进程启动并设置 title
+    await waitForAlive(zombie1.pid)
+    await waitForAlive(zombie2.pid)
 
     // killAllDaemonProcesses 应该杀死两个僵尸（排除自身）
     const killed = killAllDaemonProcesses(undefined, process.pid)
@@ -154,4 +223,28 @@ test('daemon identity matcher recognizes marker/title across install paths', asy
     }, currentEntryPath),
     false,
   )
+})
+
+test('start launches daemon without false IPC disconnect failure', async () => {
+  const homeDir = createHomeDir()
+  const wechatStub = await startWechatStubServer()
+  writeWeChatAccount(homeDir, wechatStub.baseUrl)
+
+  try {
+    const start = runCli(homeDir, ['start'])
+    assert.equal(start.status, 0, start.stderr)
+    assert.match(start.stdout, /守护进程已启动/)
+    assert.doesNotMatch(`${start.stdout}\n${start.stderr}`, /ERR_IPC_DISCONNECTED|IPC channel is already disconnected/)
+
+    const status = runCli(homeDir, ['status'])
+    assert.equal(status.status, 0, status.stderr)
+    assert.match(status.stdout, /守护进程运行中/)
+
+    const stop = runCli(homeDir, ['stop'])
+    assert.equal(stop.status, 0, stop.stderr)
+    assert.match(stop.stdout, /已停止守护进程/)
+  } finally {
+    runCli(homeDir, ['stop'])
+    await wechatStub.close()
+  }
 })

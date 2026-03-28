@@ -8,7 +8,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { execSync, execFileSync, fork } from 'node:child_process'
+import { execSync, execFileSync, spawn } from 'node:child_process'
 import { loadConfig, saveConfig, configExists, getPidFile, getDaemonLockDir, getLogDir, getConfigDir, loadWeChatAccount, saveWeChatAccount, getWeChatAccountFile, type Im2ccConfig } from '../src/config.js'
 import { listActiveBindings, archiveBinding } from '../src/session.js'
 import { getClaudeVersion } from '../src/claude-driver.js'
@@ -17,7 +17,7 @@ import { expandPath, validatePath, isValidSessionName } from '../src/security.js
 import { getDriver, hasDriver, type ToolId } from '../src/tool-driver.js'
 import { resumeCommand, toolCreateArgs, toolResumeArgs } from '../src/tool-cli-args.js'
 import { findSession, syncDriftedSession } from '../src/discover.js'
-import { DAEMON_LOCK_STARTUP_GRACE_MS, daemonMainModulePath, isIm2ccDaemonProcess, killAllDaemonProcesses, listDaemonProcessPids, readDaemonPidRecord } from '../src/daemon-process.js'
+import { DAEMON_LOCK_STARTUP_GRACE_MS, DAEMON_MARKER, daemonMainModulePath, isIm2ccDaemonProcess, killAllDaemonProcesses, listDaemonProcessPids, readDaemonPidRecord } from '../src/daemon-process.js'
 import { claudeSupportsSessionNameFlag } from '../src/tool-compat.js'
 import { renderUnifiedHelp } from '../src/commands.js'
 import { detectInstallRoot, listReplaceableInstallEntries, PUBLIC_ARCHIVE_URL } from '../src/upgrade.js'
@@ -356,9 +356,22 @@ async function cmdStart(): Promise<void> {
   console.log('启动 im2cc 守护进程...')
 
   const mainModule = daemonMainModulePath()
-  const child = fork(mainModule, [], {
+  const child = spawn(process.execPath, [mainModule, DAEMON_MARKER], {
     detached: true,
-    stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+    stdio: 'ignore',
+  })
+  let childErrorMessage: string | null = null
+  let childExited = false
+  let childExitCode: number | null = null
+  let childExitSignal: NodeJS.Signals | null = null
+
+  child.once('error', err => {
+    childErrorMessage = err instanceof Error ? err.message : String(err)
+  })
+  child.once('exit', (code, signal) => {
+    childExited = true
+    childExitCode = code
+    childExitSignal = signal
   })
 
   child.unref()
@@ -373,15 +386,37 @@ async function cmdStart(): Promise<void> {
     if (current.kind === 'stale') {
       break
     }
+    if (childErrorMessage !== null) {
+      break
+    }
     await new Promise(resolve => setTimeout(resolve, 100))
   }
 
-  child.disconnect()
+  if (runningPids.length === 0) {
+    const current = inspectLocalDaemonState()
+    if (current.kind === 'running') {
+      runningPids = current.pids
+    }
+  }
 
   if (runningPids.length > 0) {
     console.log(`✅ 守护进程已启动 (PID: ${runningPids.join(', ')})`)
     console.log(`   日志: im2cc logs`)
     return
+  }
+
+  if (childErrorMessage !== null) {
+    console.log(`❌ 守护进程启动失败: ${childErrorMessage}`)
+    process.exit(1)
+  }
+
+  if (childExited) {
+    const detail = childExitSignal
+      ? `signal ${childExitSignal}`
+      : `exit code ${childExitCode ?? 0}`
+    console.log(`❌ 守护进程启动失败 (${detail})`)
+    console.log('   请运行: im2cc logs')
+    process.exit(1)
   }
 
   console.log('⚠️ 启动命令已发出，但尚未确认守护进程就绪')

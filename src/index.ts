@@ -472,7 +472,7 @@ export async function startDaemon(): Promise<void> {
   log(`im2cc 已启动，${adapters.size} 个 transport，${activeBindings.length} 个活跃绑定`)
 }
 
-// 被 fork() 或 node 直接执行时，自动启动 daemon
+// 被后台子进程或 node 直接执行时，自动启动 daemon
 if (isDaemonEntrypointInvocation(process.argv, DAEMON_ENTRY)) {
   startDaemon().catch(e => {
     error(`startDaemon 失败: ${e}`)
