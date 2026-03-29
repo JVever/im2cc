@@ -10,8 +10,8 @@ import path from 'node:path'
 import { execSync } from 'node:child_process'
 import { log } from './logger.js'
 import { pathToSlug } from './discover.js'
-import { BaseToolDriver, selectTurns, formatRecap, type RecapTurn } from './base-driver.js'
-import { filterInitTurns } from './recap.js'
+import { BaseToolDriver } from './base-driver.js'
+import { filterInitTurns, type RecapTurn } from './recap.js'
 import { registerDriver, type ToolCapabilities, type CreateSessionResult, type SendMessageOptions, type SessionFileStatus } from './tool-driver.js'
 import { claudeSessionNameArgs } from './tool-compat.js'
 
@@ -89,7 +89,7 @@ export class ClaudeDriver extends BaseToolDriver {
   }
 
   /** Claude 专有 recap：从 ~/.claude/projects/{slug}/{sessionId}.jsonl 提取最近对话 */
-  override buildRecap(sessionId: string, cwd: string, budget: number): string | null {
+  override buildRecapTurn(sessionId: string, cwd: string, budget: number): RecapTurn | null {
     if (budget <= 0) return null
     const filePath = path.join(os.homedir(), '.claude', 'projects', pathToSlug(cwd), `${sessionId}.jsonl`)
     if (!fs.existsSync(filePath)) {
@@ -141,8 +141,7 @@ export class ClaudeDriver extends BaseToolDriver {
 
     const meaningful = filterInitTurns(turns)
     if (meaningful.length === 0) return null
-    const selected = selectTurns(meaningful, budget)
-    return selected.length > 0 ? formatRecap(selected, budget) : null
+    return meaningful.at(-1) ?? null
   }
 }
 

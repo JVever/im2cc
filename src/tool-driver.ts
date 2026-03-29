@@ -5,6 +5,7 @@
  */
 
 import type { ChildProcess } from 'node:child_process'
+import type { RecapTurn } from './recap.js'
 
 /** 支持的 AI 编程工具 ID */
 export type ToolId = 'claude' | 'codex' | 'gemini'
@@ -56,8 +57,8 @@ export interface ToolDriver {
   /** 中断正在运行的进程 */
   interrupt(child: ChildProcess): Promise<void>
 
-  /** 构建上下文回顾（/fc 切换时展示最近对话）。返回格式化文本，无内容则返回 null */
-  buildRecap?(sessionId: string, cwd: string, budget: number): string | null
+  /** 获取最近一轮上下文回顾（/fc 切换时展示）。返回最近一轮对话，无内容则返回 null */
+  buildRecapTurn?(sessionId: string, cwd: string, budget: number): RecapTurn | null
 }
 
 // --- 全局 driver 注册表 ---

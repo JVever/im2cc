@@ -8,6 +8,7 @@ import fs from 'node:fs'
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import crypto from 'node:crypto'
 import type { ToolDriver, ToolId, ToolCapabilities, CreateSessionResult, SendMessageOptions, SessionFileStatus } from './tool-driver.js'
+import type { RecapTurn } from './recap.js'
 
 /** runTool 的选项 */
 export interface RunToolOptions {
@@ -50,7 +51,7 @@ export abstract class BaseToolDriver implements ToolDriver {
   }
 
   /** 默认：不支持 recap（子类可覆盖） */
-  buildRecap(_sessionId: string, _cwd: string, _budget: number): string | null {
+  buildRecapTurn(_sessionId: string, _cwd: string, _budget: number): RecapTurn | null {
     return null
   }
 
@@ -288,41 +289,4 @@ function buildToolFailure(cmd: string, rawMessage: string, eventError: string): 
     userMessage: `${toolName} 执行失败: ${normalized}`,
     rawMessage,
   }
-}
-
-// --- recap 通用工具（供各 driver 的 buildRecap 使用）---
-
-export interface RecapTurn {
-  user: string
-  assistant: string
-}
-
-/** 根据字符预算从末尾选取完整轮次 */
-export function selectTurns(turns: RecapTurn[], budget: number): RecapTurn[] {
-  if (turns.length === 0) return []
-  const selected: RecapTurn[] = []
-  let spent = 0
-  for (let i = turns.length - 1; i >= 0; i--) {
-    const cost = turns[i].user.length + turns[i].assistant.length
-    if (selected.length === 0) { selected.unshift(turns[i]); spent = cost }
-    else if (spent + cost <= budget) { selected.unshift(turns[i]); spent += cost }
-    else break
-  }
-  return selected
-}
-
-/** 格式化轮次为 IM 消息文本 */
-export function formatRecap(turns: RecapTurn[], budget: number): string {
-  const parts: string[] = ['📋 最近对话回顾:']
-  for (const turn of turns) {
-    parts.push('---')
-    parts.push(`👤 ${turn.user}`)
-    let assistantText = turn.assistant
-    if (turns.length === 1 && turn.user.length + assistantText.length > budget) {
-      const maxLen = Math.max(budget - turn.user.length - 50, 200)
-      assistantText = assistantText.slice(0, maxLen) + '\n…(已截断)'
-    }
-    parts.push(`🤖 ${assistantText}`)
-  }
-  return parts.join('\n')
 }

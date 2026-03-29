@@ -24,7 +24,7 @@ im2cc 核心业务逻辑：IM 消息接收 → 命令路由 → 本地 AI coding
 - output.ts：stream-json 事件 → 飞书消息文本格式化
 - registry.ts：命名 session 注册表（register/lookup/list/remove，永久寻址）
 - discover.ts：扫描本地 Claude Code 对话（session 发现、slug→路径反推，作为注册表的补充）
-- recap.ts：上下文回顾（读取 session JSONL 提取最近对话，/fc 时自动发送）
+- recap.ts：上下文回顾（过滤 init 消息、格式化最近一轮对话、/fc 时按最多 3 条消息发送）
 - feishu.ts：飞书 REST 轮询适配器（定时拉取群消息、发消息、资源下载）
 - wechat.ts：微信 ClawBot iLink 适配器（文本长轮询、发送、绑定）
 - poll-cursor.ts：轮询游标持久化（per-group 游标读写，原子文件操作）

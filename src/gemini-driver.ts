@@ -7,8 +7,8 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { BaseToolDriver, selectTurns, formatRecap, type RecapTurn } from './base-driver.js'
-import { filterInitTurns } from './recap.js'
+import { BaseToolDriver } from './base-driver.js'
+import { filterInitTurns, type RecapTurn } from './recap.js'
 import { registerDriver, type ToolCapabilities, type CreateSessionResult, type SendMessageOptions } from './tool-driver.js'
 import { log } from './logger.js'
 
@@ -60,7 +60,7 @@ export class GeminiDriver extends BaseToolDriver {
   }
 
   /** Gemini recap：从 ~/.gemini/tmp/{projectName}/chats/ 中找到 session JSON 并提取对话 */
-  buildRecap(sessionId: string, cwd: string, budget: number): string | null {
+  buildRecapTurn(sessionId: string, cwd: string, budget: number): RecapTurn | null {
     if (budget <= 0) return null
 
     // Find session file: ~/.gemini/tmp/{projectName}/chats/ where projectName is basename of cwd
@@ -121,9 +121,8 @@ export class GeminiDriver extends BaseToolDriver {
         const aText = currentAssistant.join('\n').trim()
         if (aText) turns.push({ user: currentUser, assistant: aText })
       }
-      if (turns.length === 0) return null
-      const selected = selectTurns(turns, budget)
-      return selected.length > 0 ? formatRecap(selected, budget) : null
+      const meaningful = filterInitTurns(turns)
+      return meaningful.at(-1) ?? null
     } catch { return null }
   }
 }

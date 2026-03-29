@@ -20,6 +20,7 @@ import './gemini-driver.js'
 import { listRegistered } from './registry.js'
 import { getDriver } from './tool-driver.js'
 import { stageFile, consumeStaged, ensureInbox, classifyFile, runInboxCleanup } from './file-staging.js'
+import { buildRecapMessages } from './recap.js'
 import { log, error } from './logger.js'
 import type { TransportAdapter, IncomingMessage, TransportType } from './transport.js'
 import {
@@ -305,19 +306,31 @@ export async function startDaemon(): Promise<void> {
 
       try {
         const reply = await handleCommand(cmd, conversationId, config, transport)
-        await send(reply)
-
         if (cmd.command === 'fc' && cmd.args && config.recapBudget > 0) {
           const binding = getBinding(conversationId)
           if (binding) {
             try {
               const driver = getDriver(binding.tool ?? 'claude')
-              const recap = driver.buildRecap?.(binding.sessionId, binding.cwd, config.recapBudget) ?? null
-              if (recap) await send(recap)
+              const turn = driver.buildRecapTurn?.(binding.sessionId, binding.cwd, config.recapBudget) ?? null
+              const recapMessages = turn
+                ? buildRecapMessages(turn, { intro: reply, transport, maxMessages: 3 })
+                : []
+              if (recapMessages.length > 0) {
+                for (const message of recapMessages) {
+                  await send(message)
+                }
+              } else {
+                await send(reply)
+              }
             } catch (err) {
               log(`[recap] 生成失败: ${err}`)
+              await send(reply)
             }
+          } else {
+            await send(reply)
           }
+        } else {
+          await send(reply)
         }
       } catch (err) {
         error(`命令执行失败 [${conversationId}] /${cmd.command}: ${err}`)
