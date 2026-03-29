@@ -35,12 +35,13 @@ You should:
 
 1. detect the current install state
 2. complete missing base installation steps
-3. ask which IM channel the user wants: Feishu, WeChat, or both
-4. if Feishu is chosen and no working bot exists, call `$create-feishu-bot`
-5. write the returned credentials into `~/.im2cc/config.json`
-6. start and validate the daemon
-7. help the user create one real session and attach to it from mobile
-8. offer to enable auto-start
+3. ask which IM channel the user wants to set up first: Feishu or WeChat
+4. prefer completing one IM end-to-end before offering the second
+5. if Feishu is chosen and no working bot exists, call `$create-feishu-bot`
+6. write the returned credentials into `~/.im2cc/config.json`
+7. start and validate the daemon
+8. help the user create one real session and attach to it from mobile
+9. after first success, continue with auto-start and basic security hardening (`im2cc secure`)
 
 ## Validation standard
 
@@ -54,7 +55,12 @@ A successful onboarding requires:
 - terminal convenience aliases `fn-codex` and `fn-gemini` are acceptable shortcuts on the computer side
 - the user can see that session from IM and attach with `/fc <name>`
 
-Only after this flow succeeds should onboarding be considered complete.
+Only after this flow succeeds should onboarding move into post-success hardening.
+
+Do not stop at first success if the user asked you to complete the setup. Continue until:
+
+- auto-start is enabled or explicitly skipped by the user
+- basic security hardening is completed or explicitly skipped by the user
 
 ## Feishu branch
 
@@ -83,3 +89,4 @@ Minimize user interruptions. Only stop for:
 - WeChat QR scan
 - final mobile-side validation commands
 - auto-start opt-in
+- security hardening confirmation

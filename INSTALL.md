@@ -103,21 +103,31 @@ fs()       { im2cc show "$@"; }
 4. 获取 App ID 和 App Secret 后，运行 `im2cc setup` 输入凭证
 5. 把 Bot 添加到一个飞书群中
 
+注意：`im2cc setup` 现在只负责保存飞书凭证，不再同时配置白名单和路径白名单。
+
 **微信设置**：
 1. 确认用户的微信已开启 ClawBot 插件（设置 → 插件 → ClawBot）
 2. 运行 `im2cc wechat login`，会在终端显示 QR 码
 3. 让用户用微信扫码
 
-### 6. 启动并验证消息链路
+### 6. 进入 onboarding 主流程
 
 ```bash
-im2cc start
-im2cc doctor
+im2cc onboard
 ```
 
-告知用户在飞书群或微信中先发送 `/fhelp` 或 `/fl` 测试。这一步只验证消息链路，不代表完整安装已经结束。
+从这里开始，优先按 `im2cc onboard` 的输出走，不要自己重新发明流程。目标顺序是：
+
+1. 先确认至少一个正式支持工具已可用
+2. 只接通一个 IM
+3. 启动守护进程
+4. 创建一个真实对话
+5. 在飞书或微信里 `/fc` 成功接入
+6. 首次成功后再做开机自启和安全加固
 
 ### 7. 验证一次真实对话流转
+
+如果 `im2cc onboard` 还没走到这一步，继续按它的提示推进。需要人工协助时，再指导用户做下面这组操作。
 
 在电脑端创建一个真实对话。优先让用户先 `cd` 到目标项目目录，再执行：
 
@@ -141,16 +151,29 @@ fn-codex demo <项目路径>
 
 只有当用户能看到对话并成功接入后，才算完成第一次成功验证。
 
-### 8. 配置开机自启动（推荐）
+### 8. 完成 post-success 稳定化（强烈推荐）
 
-如果用户同意开启开机自启动，在 macOS 上执行：
+用户完成第一次真实对话流转后，立刻补下面两步。
+
+先配置开机自启动。在 macOS 上执行：
 
 ```bash
 im2cc install-service
 launchctl load ~/Library/LaunchAgents/com.im2cc.daemon.plist
 ```
 
-然后再次运行 `im2cc status` 或 `im2cc doctor` 验证。
+再运行：
+
+```bash
+im2cc secure
+```
+
+这一步用来补齐：
+
+- 用户白名单：哪些 IM 用户能控制 bot
+- 路径白名单：允许绑定和操作哪些项目目录
+
+然后再次运行 `im2cc doctor` 验证。
 
 ### 9. 教用户基本操作
 
@@ -159,6 +182,8 @@ launchctl load ~/Library/LaunchAgents/com.im2cc.daemon.plist
 - 如果要指定工具，可以用标准写法 `fn --tool codex|gemini <名称> [项目路径]`，也可以在终端里用 `fn-codex` / `fn-gemini`
 - 离开电脑后在飞书/微信中用 `/fc <名称>` 接入
 - 回到电脑后用 `fc <名称>` 接回
-- 在电脑终端用 `im2cc help` 或 `fhelp` 查看帮助，在飞书/微信里用 `/fhelp`
+- 在电脑终端里，`im2cc onboard` 是首用引导，`im2cc doctor` 是状态检查，`im2cc help` / `fhelp` 是高频命令速查
+- 白名单和路径限制后续用 `im2cc secure`
+- 在飞书/微信里用 `/fhelp`
 - 用 `fl` 查看所有对话
 - 以后升级优先直接用 `im2cc upgrade`

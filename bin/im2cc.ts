@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * @input:    CLI 参数 (start/stop/status/logs/sessions/new/connect/list/delete/detach/show/setup/install-service/doctor/help/upgrade/wechat)
+ * @input:    CLI 参数 (start/stop/status/logs/sessions/new/connect/list/delete/detach/show/setup/secure/onboard/install-service/doctor/help/upgrade/wechat)
  * @output:   守护进程管理 + 完整 session 管理命令（new/connect/list/delete/detach/show）
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
@@ -19,7 +19,7 @@ import { resumeCommand, toolCreateArgs, toolResumeArgs } from '../src/tool-cli-a
 import { findSession, syncDriftedSession } from '../src/discover.js'
 import { DAEMON_LOCK_STARTUP_GRACE_MS, DAEMON_MARKER, daemonMainModulePath, isIm2ccDaemonProcess, killAllDaemonProcesses, listDaemonProcessPids, readDaemonPidRecord } from '../src/daemon-process.js'
 import { claudeSupportsSessionNameFlag } from '../src/tool-compat.js'
-import { renderUnifiedHelp } from '../src/commands.js'
+import { renderRegisteredSessionList, renderUnifiedHelp } from '../src/commands.js'
 import { detectInstallRoot, listReplaceableInstallEntries, PUBLIC_ARCHIVE_URL } from '../src/upgrade.js'
 import readline from 'node:readline'
 
@@ -71,9 +71,20 @@ function cmdHelp(): void {
   console.log(renderUnifiedHelp())
 }
 
+function validateSessionPathForAttach(cwd: string, config: Im2ccConfig): { ok: true, resolvedPath: string } | { ok: false, message: string } {
+  const validation = validatePath(cwd, config)
+  if (!validation.valid) {
+    return {
+      ok: false,
+      message: `❌ ${validation.error}\n如需继续，请先调整路径白名单后再接入这个对话。`,
+    }
+  }
+  return { ok: true, resolvedPath: validation.resolvedPath }
+}
+
 function commandExists(commandName: string): boolean {
   try {
-    execFileSync(commandName, ['--version'], { stdio: 'ignore' })
+    execFileSync('which', [commandName], { stdio: 'ignore' })
     return true
   } catch {
     return false
@@ -191,9 +202,12 @@ switch (command) {
   case 'detach': cmdDetach(); break
   case 'show': cmdShow(); break
   case 'setup': await cmdSetup(); break
+  case 'secure': await cmdSecure(); break
+  case 'onboard': cmdOnboard(); break
   case 'install-service': cmdInstallService(); break
   case 'doctor': cmdDoctor(); break
   case 'help': cmdHelp(); break
+  case 'fhelp': cmdHelp(); break
   case 'upgrade': await cmdUpgrade(); break
   case 'wechat': await cmdWeChat(); break
   default:
@@ -216,6 +230,8 @@ switch (command) {
 
 守护进程:
   setup              配置飞书 App 凭证
+  secure             配置用户白名单和路径白名单
+  onboard            查看首次安装与 post-success 引导
   start              启动守护进程
   stop               停止守护进程
   status             查看运行状态
@@ -231,6 +247,7 @@ switch (command) {
   install-service    安装 macOS 开机自启
   doctor             检查环境
   help               查看统一帮助
+  fhelp              查看统一帮助（help 的别名）
   upgrade            升级到最新版本
 `)
 }
@@ -646,6 +663,15 @@ async function cmdConnect(): Promise<void> {
     return
   }
 
+  const config = loadConfig()
+  const pathCheck = validateSessionPathForAttach(session.cwd, config)
+  if (!pathCheck.ok) {
+    console.log(pathCheck.message)
+    return
+  }
+  session = { ...session, cwd: pathCheck.resolvedPath }
+  register(session.name, session.sessionId, session.cwd, session.tool ?? 'claude')
+
   let tool = session.tool ?? 'claude'
 
   // 断开前同步：检查 session 是否漂移（Plan 模式等）
@@ -733,12 +759,14 @@ async function cmdConnectDoubleArg(newName: string, query: string): Promise<void
 
   const match = matches[0]
   const sessionId = match.sessionId
-  const cwd = match.projectPath
+  const config = loadConfig()
+  const pathCheck = validateSessionPathForAttach(match.projectPath, config)
 
-  if (!cwd) {
-    console.log('❌ 无法还原项目路径')
+  if (!pathCheck.ok) {
+    console.log(pathCheck.message)
     return
   }
+  const cwd = pathCheck.resolvedPath
 
   // 验证 session 文件位置（使用 Claude driver，因为 discover 只支持 Claude）
   const driver = getDriver('claude')
@@ -781,13 +809,13 @@ function cmdList(): void {
     return
   }
 
-  console.log('已注册的对话:')
-  console.log('─'.repeat(50))
+  console.log(renderRegisteredSessionList(all))
+  console.log('')
+  console.log('本地状态:')
   for (const s of all) {
     const tmux = findTmuxSession(s.name, s.tool)
     const status = tmux ? '🟢 活跃' : '⬤ 休眠'
-    const toolTag = s.tool && s.tool !== 'claude' ? ` [${s.tool}]` : ''
-    console.log(`  ${status}  ${s.name}  (${path.basename(s.cwd)})${toolTag}  [${s.sessionId.slice(0, 8)}]`)
+    console.log(`  ${status}  ${s.name} [${s.sessionId.slice(0, 8)}]`)
   }
 }
 
@@ -857,9 +885,154 @@ function cmdShow(): void {
 
 // ─── 配置/运维命令 ───────────────────────────────────
 
-async function cmdSetup(): Promise<void> {
+type LaunchAgentState = 'missing' | 'installed' | 'loaded' | 'unsupported'
+
+interface RuntimeSnapshot {
+  config: Im2ccConfig
+  wechatBound: boolean
+  claudeInstalled: boolean
+  codexInstalled: boolean
+  geminiInstalled: boolean
+  daemonState: DaemonState
+  launchAgentState: LaunchAgentState
+  registeredCount: number
+  bindingCount: number
+  firstSessionName: string | null
+}
+
+function createPrompt() {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
-  const ask = (q: string): Promise<string> => new Promise(r => rl.question(q, r))
+  return {
+    ask(question: string): Promise<string> {
+      return new Promise(resolve => rl.question(question, resolve))
+    },
+    close(): void {
+      rl.close()
+    },
+  }
+}
+
+function splitCsvList(value: string): string[] {
+  return value.split(',').map(item => item.trim()).filter(Boolean)
+}
+
+function detectLaunchAgentState(): LaunchAgentState {
+  if (process.platform !== 'darwin') return 'unsupported'
+
+  const plistFile = path.join(os.homedir(), 'Library/LaunchAgents', 'com.im2cc.daemon.plist')
+  if (!fs.existsSync(plistFile)) return 'missing'
+
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null
+  if (uid !== null) {
+    try {
+      execFileSync('launchctl', ['print', `gui/${uid}/com.im2cc.daemon`], { stdio: 'ignore' })
+      return 'loaded'
+    } catch {}
+  }
+  return 'installed'
+}
+
+function collectRuntimeSnapshot(): RuntimeSnapshot {
+  const config = loadConfig()
+  const registered = listRegistered()
+  const bindings = listActiveBindings()
+  return {
+    config,
+    wechatBound: Boolean(loadWeChatAccount()?.botToken),
+    claudeInstalled: getClaudeVersion() !== 'unknown',
+    codexInstalled: commandExists('codex'),
+    geminiInstalled: commandExists('gemini'),
+    daemonState: inspectLocalDaemonState(),
+    launchAgentState: detectLaunchAgentState(),
+    registeredCount: registered.length,
+    bindingCount: bindings.length,
+    firstSessionName: registered[0]?.name ?? null,
+  }
+}
+
+function preferredFirstSessionCommand(snapshot: RuntimeSnapshot): string {
+  if (snapshot.claudeInstalled) return 'fn demo'
+  if (snapshot.codexInstalled) return 'fn --tool codex demo'
+  return 'fn --tool gemini demo'
+}
+
+function needsSecurityReview(config: Im2ccConfig): boolean {
+  if (config.allowedUserIds.length === 0) return true
+  if (config.pathWhitelist.length !== 1) return true
+  return expandPath(config.pathWhitelist[0]) === path.join(os.homedir(), 'Code')
+}
+
+function nextActionLines(snapshot: RuntimeSnapshot): string[] {
+  const hasCoreTool = snapshot.claudeInstalled || snapshot.codexInstalled
+  const hasIm = Boolean(snapshot.config.feishu.appId) || snapshot.wechatBound
+  const daemonRunning = snapshot.daemonState.kind === 'running'
+
+  if (!hasCoreTool) {
+    return ['先安装并登录 Claude Code 或 Codex，然后重新运行 im2cc onboard']
+  }
+  if (!hasIm) {
+    return ['先选一个 IM：飞书运行 im2cc setup；微信运行 im2cc wechat login']
+  }
+  if (!daemonRunning) {
+    return ['运行 im2cc start']
+  }
+  if (snapshot.registeredCount === 0) {
+    return [`先进入你的项目目录后运行 ${preferredFirstSessionCommand(snapshot)}`]
+  }
+  if (snapshot.bindingCount === 0 && snapshot.firstSessionName) {
+    return [`在飞书或微信里发送 /fc ${snapshot.firstSessionName}`]
+  }
+
+  const actions: string[] = []
+  if (snapshot.launchAgentState === 'missing' || snapshot.launchAgentState === 'installed') {
+    actions.push('运行 im2cc install-service，并按提示加载 LaunchAgent')
+  }
+  if (needsSecurityReview(snapshot.config)) {
+    actions.push('运行 im2cc secure，配置用户白名单和项目路径白名单')
+  }
+  if (actions.length > 0) return actions
+  return ['已经完成首次成功并做过基础加固；后续高频命令见 im2cc help']
+}
+
+function cmdOnboard(): void {
+  const snapshot = collectRuntimeSnapshot()
+  const hasCoreTool = snapshot.claudeInstalled || snapshot.codexInstalled
+  const hasIm = Boolean(snapshot.config.feishu.appId) || snapshot.wechatBound
+  const daemonRunning = snapshot.daemonState.kind === 'running'
+  const hasMobileAttach = daemonRunning && snapshot.bindingCount > 0
+  const firstSuccessDone = hasCoreTool && hasIm && daemonRunning && snapshot.registeredCount > 0 && hasMobileAttach
+
+  console.log('im2cc onboarding')
+  console.log('─'.repeat(40))
+  console.log('Phase 1: First Success')
+  console.log(`  ${hasCoreTool ? '✅' : '⬤'} 正式支持工具: Claude Code / Codex`)
+  console.log(`  ${hasIm ? '✅' : '⬤'} 至少一个 IM 已配置（飞书或微信）`)
+  console.log(`  ${daemonRunning ? '✅' : '⬤'} 守护进程已启动`)
+  console.log(`  ${snapshot.registeredCount > 0 ? '✅' : '⬤'} 已创建真实对话`)
+  console.log(`  ${hasMobileAttach ? '✅' : '⬤'} 已在手机端接入一次真实对话`)
+  console.log('')
+  console.log('Phase 2: Make It Stick')
+  if (snapshot.launchAgentState === 'unsupported') {
+    console.log('  - 当前平台未提供内置开机自启引导')
+  } else {
+    console.log(`  ${snapshot.launchAgentState === 'loaded' ? '✅' : '⬤'} 开机自启`)
+  }
+  console.log(`  ${needsSecurityReview(snapshot.config) ? '⬤' : '✅'} 安全加固（用户白名单 / 路径白名单）`)
+  console.log('')
+  console.log(firstSuccessDone ? '你已经完成第一次成功。' : '先完成一次真实对话流转，再做稳定化配置。')
+  console.log('')
+  console.log('下一步:')
+  for (const line of nextActionLines(snapshot)) {
+    console.log(`  - ${line}`)
+  }
+  console.log('')
+  console.log('更多命令:')
+  console.log('  - im2cc doctor  # 检查状态并获取下一步建议')
+  console.log('  - im2cc help    # 查看高频命令')
+}
+
+async function cmdSetup(): Promise<void> {
+  const prompt = createPrompt()
 
   console.log('im2cc 配置向导')
   console.log('─'.repeat(40))
@@ -868,27 +1041,51 @@ async function cmdSetup(): Promise<void> {
 
   const config = loadConfig()
 
-  config.feishu.appId = (await ask(`飞书 App ID [${config.feishu.appId || '未设置'}]: `)) || config.feishu.appId
-  config.feishu.appSecret = (await ask(`飞书 App Secret [${config.feishu.appSecret ? '****' + config.feishu.appSecret.slice(-4) : '未设置'}]: `)) || config.feishu.appSecret
+  config.feishu.appId = (await prompt.ask(`飞书 App ID [${config.feishu.appId || '未设置'}]: `)) || config.feishu.appId
+  config.feishu.appSecret = (await prompt.ask(`飞书 App Secret [${config.feishu.appSecret ? '****' + config.feishu.appSecret.slice(-4) : '未设置'}]: `)) || config.feishu.appSecret
 
-  const userIds = await ask(`允许的用户 ID (逗号分隔，留空=所有人) [${config.allowedUserIds.join(',')}]: `)
-  if (userIds) config.allowedUserIds = userIds.split(',').map(s => s.trim()).filter(Boolean)
-
-  const pathWl = await ask(`路径白名单 (逗号分隔) [${config.pathWhitelist.join(',')}]: `)
-  if (pathWl) config.pathWhitelist = pathWl.split(',').map(s => s.trim()).filter(Boolean)
-
-  rl.close()
+  prompt.close()
 
   saveConfig(config)
   console.log(`\n✅ 配置已保存到 ${getConfigDir()}/config.json`)
   console.log('\n下一步:')
-  console.log('  1. 如果还没有飞书 Bot，先创建一个自建应用并添加 "机器人" 能力')
-  console.log('  2. 添加权限: im:message, im:message:send_as_bot, im:message.group_msg:readonly, im:message.group_at_msg:readonly, im:chat:readonly, im:resource')
-  console.log('  3. 发布应用并把 Bot 加入一个飞书群')
-  console.log('  4. 运行 im2cc start && im2cc doctor')
-  console.log('  5. 在飞书群里先发 /fhelp 或 /fl 验证链路')
-  console.log('  6. 在电脑上先进入项目目录后运行 fn <名称>；如需指定工具可用 fn-codex / fn-gemini，再用 /fc <名称> 验证接入')
-  console.log('  7. 如需开机自启动，运行 im2cc install-service')
+  console.log('  1. 把飞书 Bot 加入一个群，并确保权限已发布')
+  console.log('  2. 运行 im2cc onboard')
+  console.log('  3. 按 onboard 提示完成首次成功、开机自启和安全加固')
+}
+
+async function cmdSecure(): Promise<void> {
+  const prompt = createPrompt()
+  const config = loadConfig()
+
+  console.log('im2cc 安全加固')
+  console.log('─'.repeat(40))
+  console.log('建议在完成第一次真实对话流转后立刻做这一步。')
+  console.log('')
+
+  const currentUsers = config.allowedUserIds.join(',')
+  const userIds = await prompt.ask(`允许的用户 ID（逗号分隔；输入 * 表示允许所有人，留空保持不变）[${currentUsers || '所有人'}]: `)
+  if (userIds.trim() === '*') {
+    config.allowedUserIds = []
+  } else if (userIds.trim()) {
+    config.allowedUserIds = splitCsvList(userIds)
+  }
+
+  const currentPaths = config.pathWhitelist.join(', ')
+  const pathWl = await prompt.ask(`路径白名单（逗号分隔；输入 default 恢复 ~/Code，留空保持不变）[${currentPaths}]: `)
+  if (pathWl.trim().toLowerCase() === 'default') {
+    config.pathWhitelist = [path.join(os.homedir(), 'Code')]
+  } else if (pathWl.trim()) {
+    config.pathWhitelist = splitCsvList(pathWl)
+  }
+
+  prompt.close()
+
+  saveConfig(config)
+  console.log('\n✅ 安全配置已保存')
+  console.log(`用户白名单: ${config.allowedUserIds.length > 0 ? config.allowedUserIds.join(', ') : '所有人可用'}`)
+  console.log(`路径白名单: ${config.pathWhitelist.join(', ')}`)
+  console.log('建议再运行一次 im2cc doctor 确认当前状态。')
 }
 
 function cmdInstallService(): void {
@@ -940,6 +1137,9 @@ function cmdInstallService(): void {
 }
 
 function cmdDoctor(): void {
+  const snapshot = collectRuntimeSnapshot()
+  const config = snapshot.config
+
   console.log('im2cc 环境检查')
   console.log('─'.repeat(40))
 
@@ -968,20 +1168,16 @@ function cmdDoctor(): void {
 
   // 配置
   console.log(`配置文件: ${configExists() ? '✅ 已配置' : '❌ 未配置 (运行 im2cc setup)'}`)
-
-  const config = loadConfig()
   console.log(`飞书 App ID: ${config.feishu.appId ? '✅ ****' + config.feishu.appId.slice(-4) : '⬤ 未设置'}`)
   console.log(`用户白名单: ${config.allowedUserIds.length > 0 ? '✅ ' + config.allowedUserIds.length + ' 人' : '⚠️ 未设置 (所有人可用)'}`)
   console.log(`路径白名单: ${config.pathWhitelist.join(', ')}`)
 
   // 注册表 / 活跃绑定
-  const registered = listRegistered()
-  console.log(`已注册对话: ${registered.length}${registered.length === 0 ? ' (先进入项目目录后用 fn <名称> 创建)' : ''}`)
-  const bindings = listActiveBindings()
-  console.log(`活跃绑定: ${bindings.length}`)
+  console.log(`已注册对话: ${snapshot.registeredCount}${snapshot.registeredCount === 0 ? ' (先进入项目目录后用 fn <名称> 创建)' : ''}`)
+  console.log(`活跃绑定: ${snapshot.bindingCount}`)
 
   // PID 检查
-  const daemonState = inspectLocalDaemonState()
+  const daemonState = snapshot.daemonState
   if (daemonState.kind === 'running') {
     console.log(`守护进程: 🟢 运行中 (PID: ${daemonState.pids.join(', ')})`)
   } else if (daemonState.kind === 'starting') {
@@ -997,32 +1193,22 @@ function cmdDoctor(): void {
   }
 
   // 开机自启动（macOS）
-  if (process.platform === 'darwin') {
-    const plistFile = path.join(os.homedir(), 'Library/LaunchAgents', 'com.im2cc.daemon.plist')
-    if (!fs.existsSync(plistFile)) {
-      console.log('开机自启动: ⬤ 未安装 (运行 im2cc install-service)')
-    } else {
-      let loaded = false
-      const uid = typeof process.getuid === 'function' ? process.getuid() : null
-      if (uid !== null) {
-        try {
-          execFileSync('launchctl', ['print', `gui/${uid}/com.im2cc.daemon`], { stdio: 'ignore' })
-          loaded = true
-        } catch {}
-      }
-      console.log(`开机自启动: ${loaded ? '✅ 已安装并加载' : '⚠️ 已安装但未加载'}`)
-    }
+  if (snapshot.launchAgentState === 'missing') {
+    console.log('开机自启动: ⬤ 未安装 (运行 im2cc install-service)')
+  } else if (snapshot.launchAgentState === 'installed') {
+    console.log('开机自启动: ⚠️ 已安装但未加载')
+  } else if (snapshot.launchAgentState === 'loaded') {
+    console.log('开机自启动: ✅ 已安装并加载')
   }
 
   // 微信
-  const wechatAccount = loadWeChatAccount()
-  console.log(`微信 ClawBot: ${wechatAccount?.botToken ? '✅ 已绑定' : '⬤ 未绑定 (im2cc wechat login)'}`)
+  console.log(`微信 ClawBot: ${snapshot.wechatBound ? '✅ 已绑定' : '⬤ 未绑定 (im2cc wechat login)'}`)
 
-  console.log('\n首次成功标准:')
-  console.log('  1. 先运行 im2cc start')
-  console.log('  2. 在飞书/微信里发 /fhelp 或 /fl')
-  console.log('  3. 在电脑上先进入项目目录后用 fn <名称> 创建一个真实对话（或用 fn-codex / fn-gemini）')
-  console.log('  4. 在飞书/微信里发 /fc <名称>')
+  console.log('\n下一步建议:')
+  for (const line of nextActionLines(snapshot)) {
+    console.log(`  - ${line}`)
+  }
+  console.log('  - 需要完整引导时运行 im2cc onboard')
 }
 
 async function cmdWeChat(): Promise<void> {

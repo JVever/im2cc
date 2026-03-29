@@ -17,10 +17,22 @@ import { buildSessionStatus } from './status.js'
 import { log } from './logger.js'
 import { isBestEffortTool, supportedToolChoices, supportedToolList } from './support-policy.js'
 import { resumeCommand } from './tool-cli-args.js'
+import type { RegisteredSession } from './registry.js'
 
 export interface ParsedCommand {
   command: string
   args: string
+}
+
+function validateSessionProjectPath(rawPath: string, config: Im2ccConfig): { ok: true, resolvedPath: string } | { ok: false, message: string } {
+  const validation = validatePath(rawPath, config)
+  if (!validation.valid) {
+    return {
+      ok: false,
+      message: `❌ ${validation.error}\n如需继续，请先调整路径白名单后再接入这个对话。`,
+    }
+  }
+  return { ok: true, resolvedPath: validation.resolvedPath }
 }
 
 // 统一命令名：电脑端和飞书端尽量保持一致；/help 仅作兼容别名保留
@@ -235,6 +247,9 @@ async function connectToRegistered(
   transport: TransportType = 'feishu',
 ): Promise<string> {
   const tool = (reg.tool ?? 'claude') as ToolId
+  const pathCheck = validateSessionProjectPath(reg.cwd, config)
+  if (!pathCheck.ok) return pathCheck.message
+  reg = { ...reg, cwd: pathCheck.resolvedPath }
 
   // 断开前同步：在 killLocalSession 之前检查 session 是否漂移
   if (tool === 'claude') {
@@ -246,6 +261,8 @@ async function connectToRegistered(
       reg = { ...reg, sessionId: synced }
     }
   }
+
+  register(reg.name, reg.sessionId, reg.cwd, tool)
 
   const killed = getDriver(tool).killLocalSession(reg.name, tool)
   archiveBindingsBySession(reg.sessionId, conversationId)
@@ -272,12 +289,14 @@ async function connectToDiscovered(
   config: Im2ccConfig,
   transport: TransportType = 'feishu',
 ): Promise<string> {
+  const pathCheck = validateSessionProjectPath(session.projectPath, config)
+  if (!pathCheck.ok) return pathCheck.message
   const driver = getDriver('claude')  // discovered sessions 目前只支持 claude
   const cliVersion = driver.getVersion()
   archiveBindingsBySession(session.sessionId, conversationId)
   const defaultMode = getDefaultMode('claude', config)
-  const binding = createBinding(conversationId, session.sessionId, session.projectPath, defaultMode, cliVersion, transport, 'claude')
-  register(name, session.sessionId, session.projectPath, 'claude')
+  const binding = createBinding(conversationId, session.sessionId, pathCheck.resolvedPath, defaultMode, cliVersion, transport, 'claude')
+  register(name, session.sessionId, pathCheck.resolvedPath, 'claude')
   log(`[${conversationId}] attach (discovered) → "${name}" (${session.sessionId})`)
 
   const status = await buildSessionStatus(binding)
@@ -431,17 +450,7 @@ function toolDisplayOrder(tool: string): number {
   }
 }
 
-function handleFl(): string {
-  const registered = listRegistered()
-  if (registered.length === 0) {
-    return [
-      '还没有已注册的对话。',
-      '首次使用：请先在电脑终端运行 fn <名称> 创建第一个对话。',
-      '如果你用的是 Codex 或 Gemini，也可以运行 fn-codex <名称> 或 fn-gemini <名称>。',
-      '创建完成后，回到这里发送 /fc <名称> 接入。',
-    ].join('\n')
-  }
-
+export function renderRegisteredSessionList(registered: RegisteredSession[]): string {
   // 按工具分组，组内按字母序，并保留项目 basename 方便在手机端区分
   const byTool = new Map<string, Array<{ name: string, cwdBase: string }>>()
   for (const s of registered) {
@@ -463,6 +472,20 @@ function handleFl(): string {
     sections.push(`── ${toolDisplayName(tool)} ──\n${sessions.map(s => `  ${s.name} (${s.cwdBase})`).join('\n')}`)
   }
   return `📋 已注册的对话 (${registered.length}):\n${sections.join('\n')}`
+}
+
+function handleFl(): string {
+  const registered = listRegistered()
+  if (registered.length === 0) {
+    return [
+      '还没有已注册的对话。',
+      '首次使用：请先在电脑终端运行 fn <名称> 创建第一个对话。',
+      '如果你用的是 Codex 或 Gemini，也可以运行 fn-codex <名称> 或 fn-gemini <名称>。',
+      '创建完成后，回到这里发送 /fc <名称> 接入。',
+    ].join('\n')
+  }
+
+  return renderRegisteredSessionList(registered)
 }
 
 function handleFk(args: string, conversationId: string): string {
@@ -503,6 +526,7 @@ export function renderUnifiedHelp(): string {
     '',
     '电脑终端：',
     'fhelp                    — 查看帮助',
+    'im2cc onboard            — 查看首次安装引导',
     'im2cc upgrade            — 升级到最新版本',
     'fn <名称>                — 用当前目录创建对话',
     'fn-codex <名称>          — 用当前目录创建 Codex 对话',
