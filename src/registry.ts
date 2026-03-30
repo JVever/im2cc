@@ -14,6 +14,7 @@ export interface RegisteredSession {
   sessionId: string
   cwd: string
   tool: ToolId
+  claudeProfile?: string
   permissionMode?: string
   createdAt: string
   lastUsedAt: string
@@ -66,7 +67,38 @@ export function register(name: string, sessionId: string, cwd: string, tool: Too
   }
 
   const now = new Date().toISOString()
-  reg[name] = { sessionId, cwd, tool, createdAt: reg[name]?.createdAt ?? now, lastUsedAt: now }
+  reg[name] = { sessionId, cwd, tool, createdAt: reg[name]?.createdAt ?? now, lastUsedAt: now, claudeProfile: reg[name]?.claudeProfile }
+  writeRegistry(reg)
+  return { name, ...reg[name] }
+}
+
+export function registerWithMeta(
+  name: string,
+  sessionId: string,
+  cwd: string,
+  tool: ToolId = 'claude',
+  updates: Partial<Pick<RegisteredSession, 'claudeProfile' | 'permissionMode'>> = {},
+): RegisteredSession {
+  const reg = readRegistry()
+
+  const existingOwner = findBySessionId(reg, sessionId)
+  if (existingOwner && existingOwner !== name) {
+    throw new Error(
+      `session ${sessionId.slice(0, 8)} 已被 "${existingOwner}" 注册，不能同时注册为 "${name}"。` +
+      `如果要改名，请先 fk ${existingOwner}。`
+    )
+  }
+
+  const now = new Date().toISOString()
+  reg[name] = {
+    sessionId,
+    cwd,
+    tool,
+    createdAt: reg[name]?.createdAt ?? now,
+    lastUsedAt: now,
+    claudeProfile: updates.claudeProfile ?? reg[name]?.claudeProfile,
+    permissionMode: updates.permissionMode ?? reg[name]?.permissionMode,
+  }
   writeRegistry(reg)
   return { name, ...reg[name] }
 }
@@ -93,6 +125,14 @@ export function lookup(query: string): RegisteredSession | null {
     return { name, ...data }
   }
 
+  return null
+}
+
+export function lookupBySessionId(sessionId: string): RegisteredSession | null {
+  const reg = readRegistry()
+  for (const [name, data] of Object.entries(reg)) {
+    if (data.sessionId === sessionId) return { name, ...data }
+  }
   return null
 }
 

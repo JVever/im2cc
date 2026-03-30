@@ -12,7 +12,7 @@ import { execSync, execFileSync, spawn } from 'node:child_process'
 import { loadConfig, saveConfig, configExists, getPidFile, getDaemonLockDir, getLogDir, getConfigDir, loadWeChatAccount, saveWeChatAccount, getWeChatAccountFile, type Im2ccConfig } from '../src/config.js'
 import { listActiveBindings, archiveBinding } from '../src/session.js'
 import { getClaudeVersion } from '../src/claude-driver.js'
-import { register, lookup, listRegistered, remove } from '../src/registry.js'
+import { register, registerWithMeta, lookup, listRegistered, remove } from '../src/registry.js'
 import { expandPath, validatePath, isValidSessionName } from '../src/security.js'
 import { getDriver, hasDriver, type ToolId } from '../src/tool-driver.js'
 import { resumeCommand, toolCreateArgs, toolResumeArgs } from '../src/tool-cli-args.js'
@@ -21,6 +21,7 @@ import { DAEMON_LOCK_STARTUP_GRACE_MS, DAEMON_MARKER, daemonMainModulePath, isIm
 import { claudeSupportsSessionNameFlag } from '../src/tool-compat.js'
 import { renderRegisteredSessionList, renderUnifiedHelp } from '../src/commands.js'
 import { detectInstallRoot, listReplaceableInstallEntries, PUBLIC_ARCHIVE_URL } from '../src/upgrade.js'
+import { hasCustomClaudeLauncher, selectClaudeProfile } from '../src/claude-launcher.js'
 import readline from 'node:readline'
 
 // 触发各 driver 自注册（模块级副作用）
@@ -568,15 +569,25 @@ async function cmdNew(): Promise<void> {
     return
   }
 
+  let claudeProfile: string | undefined
+  if (tool === 'claude' && hasCustomClaudeLauncher(config)) {
+    try {
+      claudeProfile = selectClaudeProfile(validation.resolvedPath, name, config)
+    } catch (err) {
+      console.log(`❌ Claude 渠道选择失败: ${err instanceof Error ? err.message : String(err)}`)
+      return
+    }
+  }
+
   const toolLabel = tool !== 'claude' ? ` [${tool}]` : ''
   console.log(`创建新对话 "${name}"${toolLabel} → ${validation.resolvedPath}...`)
 
   try {
     const driver = getDriver(tool)
-    const result = await driver.createSession(validation.resolvedPath, config.defaultPermissionMode ?? 'default', name)
+    const result = await driver.createSession(validation.resolvedPath, config.defaultPermissionMode ?? 'default', name, { claudeProfile })
     const sessionId = result.sessionId
 
-    register(name, sessionId, validation.resolvedPath, tool)
+    registerWithMeta(name, sessionId, validation.resolvedPath, tool, { claudeProfile })
 
     // 在 tmux 中启动交互式工具
     const tmuxSession = `im2cc-${tool}-${name}`
@@ -590,7 +601,7 @@ async function cmdNew(): Promise<void> {
     }
 
     try {
-      const tmuxArgs = toolResumeArgs(tool, sessionId, name)
+      const tmuxArgs = toolResumeArgs(tool, sessionId, name, { claudeProfile })
       execFileSync('tmux', [
         'new-session', '-d', '-s', tmuxSession, '-c', validation.resolvedPath,
         ...tmuxArgs,
@@ -604,7 +615,7 @@ async function cmdNew(): Promise<void> {
       // tmux 不可用，直接启动
       console.log(`✅ 已创建 "${name}"`)
       console.log(`   打开: im2cc connect ${name}`)
-      const tmuxArgs = toolResumeArgs(tool, sessionId, name)
+      const tmuxArgs = toolResumeArgs(tool, sessionId, name, { claudeProfile })
       execFileSync(tmuxArgs[0], tmuxArgs.slice(1), { stdio: 'inherit', cwd: validation.resolvedPath })
     }
   } catch (err) {
@@ -670,7 +681,7 @@ async function cmdConnect(): Promise<void> {
     return
   }
   session = { ...session, cwd: pathCheck.resolvedPath }
-  register(session.name, session.sessionId, session.cwd, session.tool ?? 'claude')
+  registerWithMeta(session.name, session.sessionId, session.cwd, session.tool ?? 'claude', { claudeProfile: session.claudeProfile })
 
   let tool = session.tool ?? 'claude'
 
@@ -680,7 +691,7 @@ async function cmdConnect(): Promise<void> {
     const synced = syncDriftedSession(session.name, session.sessionId, session.cwd, allNames)
     if (synced) {
       console.log(`🔄 检测到 session 漂移，已自动同步: ${session.sessionId.slice(0, 8)} → ${synced.slice(0, 8)}`)
-      register(session.name, synced, session.cwd, 'claude')
+      registerWithMeta(session.name, synced, session.cwd, 'claude', { claudeProfile: session.claudeProfile })
       session = { ...session, sessionId: synced }
     }
   }
@@ -708,8 +719,8 @@ async function cmdConnect(): Promise<void> {
 
   const tmuxSession = `im2cc-${tool}-${session.name}`
   const cmdArgs = status === 'here'
-    ? toolResumeArgs(tool as ToolId, session.sessionId, session.name)
-    : toolCreateArgs(tool as ToolId, session.sessionId, session.name)
+    ? toolResumeArgs(tool as ToolId, session.sessionId, session.name, { claudeProfile: session.claudeProfile })
+    : toolCreateArgs(tool as ToolId, session.sessionId, session.name, { claudeProfile: session.claudeProfile })
 
   console.log(`恢复 "${session.name}" → ${path.basename(session.cwd)}`)
 

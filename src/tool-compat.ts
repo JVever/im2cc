@@ -5,6 +5,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
+import { buildClaudeLauncherEnv, getClaudeLauncher } from './claude-launcher.js'
 
 let claudeSupportsNameCache: boolean | null = null
 
@@ -22,10 +23,11 @@ export function claudeSupportsSessionNameFlag(): boolean {
   if (claudeSupportsNameCache !== null) return claudeSupportsNameCache
 
   try {
-    const result = spawnSync('claude', ['--help'], {
+    const result = spawnSync(getClaudeLauncher(), ['--help'], {
       encoding: 'utf-8',
       timeout: 5000,
       stdio: ['ignore', 'pipe', 'pipe'],
+      env: buildClaudeLauncherEnv({ phase: 'compat' }),
     })
     const helpText = `${result.stdout ?? ''}\n${result.stderr ?? ''}`
     claudeSupportsNameCache = result.status === 0 && /\b--name\b/.test(helpText)

@@ -7,7 +7,7 @@
 import fs from 'node:fs'
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import crypto from 'node:crypto'
-import type { ToolDriver, ToolId, ToolCapabilities, CreateSessionResult, SendMessageOptions, SessionFileStatus } from './tool-driver.js'
+import type { ToolDriver, ToolId, ToolCapabilities, CreateSessionOptions, CreateSessionResult, SendMessageOptions, SessionFileStatus } from './tool-driver.js'
 import type { RecapTurn } from './recap.js'
 
 /** runTool 的选项 */
@@ -42,7 +42,7 @@ export abstract class BaseToolDriver implements ToolDriver {
 
   abstract getVersion(): string
   abstract isAvailable(): boolean
-  abstract createSession(cwd: string, permissionMode: string, name?: string): Promise<CreateSessionResult>
+  abstract createSession(cwd: string, permissionMode: string, name?: string, opts?: CreateSessionOptions): Promise<CreateSessionResult>
   abstract sendMessage(sessionId: string, message: string, cwd: string, permissionMode: string, opts?: SendMessageOptions): Promise<string>
 
   /** 默认：不支持 session 文件检查（子类可覆盖） */

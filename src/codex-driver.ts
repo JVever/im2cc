@@ -9,7 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { BaseToolDriver } from './base-driver.js'
 import { filterInitTurns, type RecapTurn } from './recap.js'
-import { registerDriver, type ToolCapabilities, type CreateSessionResult, type SendMessageOptions } from './tool-driver.js'
+import { registerDriver, type ToolCapabilities, type CreateSessionOptions, type CreateSessionResult, type SendMessageOptions } from './tool-driver.js'
 import { log } from './logger.js'
 
 export class CodexDriver extends BaseToolDriver {
@@ -23,7 +23,7 @@ export class CodexDriver extends BaseToolDriver {
   getVersion(): string { return this.getToolVersion('codex') }
   isAvailable(): boolean { return this.checkInstalled('codex') }
 
-  async createSession(cwd: string, permissionMode: string, _name?: string): Promise<CreateSessionResult> {
+  async createSession(cwd: string, permissionMode: string, _name?: string, _opts?: CreateSessionOptions): Promise<CreateSessionResult> {
     let sessionId: string | null = null
     const output = await this.runTool({
       cmd: 'codex',

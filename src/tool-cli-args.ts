@@ -6,6 +6,11 @@
 
 import type { ToolId } from './tool-driver.js'
 import { claudeSessionNameArgs } from './tool-compat.js'
+import { buildClaudeInteractiveCommand } from './claude-launcher.js'
+
+interface ToolCliArgsOptions {
+  claudeProfile?: string
+}
 
 export function resumeCommand(tool: ToolId, sessionId: string): string {
   switch (tool) {
@@ -20,9 +25,13 @@ export function resumeCommand(tool: ToolId, sessionId: string): string {
  * 工具创建 session 的交互式 CLI 参数（用于 tmux，保持打开等用户输入）。
  * 注意：与 driver 的 createSession（headless 非交互模式）不同。
  */
-export function toolCreateArgs(tool: ToolId, sessionId: string, name: string): string[] {
+export function toolCreateArgs(tool: ToolId, sessionId: string, name: string, opts: ToolCliArgsOptions = {}): string[] {
   switch (tool) {
-    case 'claude': return ['claude', '--session-id', sessionId, '--dangerously-skip-permissions', ...claudeSessionNameArgs(name)]
+    case 'claude':
+      return buildClaudeInteractiveCommand(
+        ['--session-id', sessionId, '--dangerously-skip-permissions', ...claudeSessionNameArgs(name)],
+        { phase: 'create', sessionId, sessionName: name, profile: opts.claudeProfile },
+      )
     case 'codex': return ['codex']
     case 'gemini': return ['gemini']
     default: return [tool]
@@ -32,9 +41,13 @@ export function toolCreateArgs(tool: ToolId, sessionId: string, name: string): s
 /**
  * 工具恢复 session 的交互式 CLI 参数（用于 tmux）。
  */
-export function toolResumeArgs(tool: ToolId, sessionId: string, name: string): string[] {
+export function toolResumeArgs(tool: ToolId, sessionId: string, name: string, opts: ToolCliArgsOptions = {}): string[] {
   switch (tool) {
-    case 'claude': return ['claude', '--resume', sessionId, '--dangerously-skip-permissions', ...claudeSessionNameArgs(name)]
+    case 'claude':
+      return buildClaudeInteractiveCommand(
+        ['--resume', sessionId, '--dangerously-skip-permissions', ...claudeSessionNameArgs(name)],
+        { phase: 'resume', sessionId, sessionName: name, profile: opts.claudeProfile },
+      )
     case 'codex': return ['codex', 'resume', sessionId]
     case 'gemini': return ['gemini', '--resume', sessionId]
     default: return [tool, '--resume', sessionId]

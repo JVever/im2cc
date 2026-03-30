@@ -18,6 +18,7 @@ import { log } from './logger.js'
 import { isBestEffortTool, supportedToolChoices, supportedToolList } from './support-policy.js'
 import { resumeCommand } from './tool-cli-args.js'
 import type { RegisteredSession } from './registry.js'
+import { hasCustomClaudeLauncher } from './claude-launcher.js'
 
 export interface ParsedCommand {
   command: string
@@ -121,6 +122,14 @@ async function handleFn(args: string, conversationId: string, config: Im2ccConfi
   const driver = getDriver(tool)
   if (!driver.isAvailable()) {
     return `❌ ${tool} 未安装或不可用\n请先安装 ${tool} CLI`
+  }
+
+  if (tool === 'claude' && hasCustomClaudeLauncher(config)) {
+    return [
+      '❌ 当前机器已启用本地 Claude 渠道选择器，不能在 IM 端直接创建 Claude 对话。',
+      '请回到电脑终端运行 fn <名称> 创建，这样才能先选择渠道。',
+      '如果要在 IM 端创建，请改用 /fn <名称> <项目名> --tool codex 或 --tool gemini。',
+    ].join('\n')
   }
 
   const resolved = resolvePath(projectHint, config)

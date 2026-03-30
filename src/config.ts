@@ -13,6 +13,7 @@ export interface Im2ccConfig {
     appId: string
     appSecret: string
   }
+  claudeLauncher: string       // 可选：本地 Claude 启动器路径；为空时直接调用 claude
   allowedUserIds: string[]    // 空数组 = 允许所有人（不推荐）
   pathWhitelist: string[]     // 允许绑定的目录前缀，默认 ['~/Code/']
   defaultPermissionMode: string // 旧字段，保留兼容：YOLO | default | auto-edit
@@ -36,6 +37,7 @@ const MESSAGE_DEDUP_DIR = path.join(DATA_DIR, 'message-dedup')
 
 const DEFAULT_CONFIG: Im2ccConfig = {
   feishu: { appId: '', appSecret: '' },
+  claudeLauncher: '',
   allowedUserIds: [],
   pathWhitelist: [path.join(os.homedir(), 'Code')],
   defaultPermissionMode: 'default',

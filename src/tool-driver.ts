@@ -22,6 +22,10 @@ export interface CreateSessionResult {
   output: string
 }
 
+export interface CreateSessionOptions {
+  claudeProfile?: string
+}
+
 export interface SendMessageOptions {
   onSpawn?: (child: ChildProcess) => void
   outputFile?: string
@@ -43,7 +47,7 @@ export interface ToolDriver {
   isAvailable(): boolean
 
   /** 创建新 session */
-  createSession(cwd: string, permissionMode: string, name?: string): Promise<CreateSessionResult>
+  createSession(cwd: string, permissionMode: string, name?: string, opts?: CreateSessionOptions): Promise<CreateSessionResult>
 
   /** 向已有 session 发送消息 */
   sendMessage(sessionId: string, message: string, cwd: string, permissionMode: string, opts?: SendMessageOptions): Promise<string>

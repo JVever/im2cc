@@ -7,13 +7,15 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { execSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { log } from './logger.js'
 import { pathToSlug } from './discover.js'
 import { BaseToolDriver } from './base-driver.js'
 import { filterInitTurns, type RecapTurn } from './recap.js'
-import { registerDriver, type ToolCapabilities, type CreateSessionResult, type SendMessageOptions, type SessionFileStatus } from './tool-driver.js'
+import { registerDriver, type ToolCapabilities, type CreateSessionOptions, type CreateSessionResult, type SendMessageOptions, type SessionFileStatus } from './tool-driver.js'
 import { claudeSessionNameArgs } from './tool-compat.js'
+import { buildClaudeLauncherEnv, getClaudeLauncher } from './claude-launcher.js'
+import { lookupBySessionId } from './registry.js'
 
 export class ClaudeDriver extends BaseToolDriver {
   readonly id = 'claude' as const
@@ -24,20 +26,41 @@ export class ClaudeDriver extends BaseToolDriver {
   }
 
   getVersion(): string {
-    return this.getToolVersion('claude')
+    try {
+      const result = spawnSync(getClaudeLauncher(), ['--version'], {
+        encoding: 'utf-8',
+        timeout: 5000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: buildClaudeLauncherEnv({ phase: 'version' }),
+      })
+      return result.status === 0 ? String(result.stdout ?? '').trim() || 'unknown' : 'unknown'
+    } catch {
+      return 'unknown'
+    }
   }
 
   isAvailable(): boolean {
-    return this.checkInstalled('claude')
+    try {
+      const result = spawnSync(getClaudeLauncher(), ['--version'], {
+        encoding: 'utf-8',
+        timeout: 5000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: buildClaudeLauncherEnv({ phase: 'version' }),
+      })
+      return result.status === 0
+    } catch {
+      return false
+    }
   }
 
-  async createSession(cwd: string, permissionMode: string, name?: string): Promise<CreateSessionResult> {
+  async createSession(cwd: string, permissionMode: string, name?: string, opts?: CreateSessionOptions): Promise<CreateSessionResult> {
     const sessionId = this.generateSessionId()
     const output = await this.runTool({
-      cmd: 'claude',
+      cmd: getClaudeLauncher(),
       message: '会话已建立。请回复"就绪"。',
       args: ['-p', '会话已建立。请回复"就绪"。', '--session-id', sessionId, ...claudeSessionNameArgs(name), '--output-format', 'stream-json', '--verbose', ...permissionArgs(permissionMode)],
       cwd,
+      env: buildClaudeLauncherEnv({ phase: 'create', sessionId, sessionName: name, profile: opts?.claudeProfile }),
     })
     return { sessionId, output }
   }
@@ -59,11 +82,14 @@ export class ClaudeDriver extends BaseToolDriver {
 
     const sessionFlag = status === 'here' ? ['--resume', sessionId] : ['--session-id', sessionId]
 
+    const reg = lookupBySessionId(sessionId)
+
     return this.runTool({
-      cmd: 'claude',
+      cmd: getClaudeLauncher(),
       message,
       args: ['-p', message, ...sessionFlag, '--output-format', 'stream-json', '--verbose', ...permissionArgs(permissionMode)],
       cwd,
+      env: buildClaudeLauncherEnv({ phase: 'send', sessionId, sessionName: reg?.name, profile: reg?.claudeProfile }),
       onSpawn: opts?.onSpawn,
       outputFile: opts?.outputFile,
       onTurnText: opts?.onTurnText,
@@ -150,8 +176,8 @@ const _driver = new ClaudeDriver()
 registerDriver(_driver)
 
 export function getClaudeVersion(): string { return _driver.getVersion() }
-export async function createSession(cwd: string, permissionMode: string, name?: string): Promise<CreateSessionResult> {
-  return _driver.createSession(cwd, permissionMode, name)
+export async function createSession(cwd: string, permissionMode: string, name?: string, opts?: CreateSessionOptions): Promise<CreateSessionResult> {
+  return _driver.createSession(cwd, permissionMode, name, opts)
 }
 export function sendMessage(sessionId: string, message: string, cwd: string, permissionMode: string, opts?: SendMessageOptions): Promise<string> {
   return _driver.sendMessage(sessionId, message, cwd, permissionMode, opts)

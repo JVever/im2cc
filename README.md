@@ -241,6 +241,25 @@ im2cc doctor
 - 标准写法仍然是 `fn --tool codex|gemini <名称> [路径]`；在 IM 中请继续使用 `/fn ... --tool codex|gemini`，不要写 `/fn-codex`。
 - 查看帮助时，电脑终端优先用 `im2cc help`；`fhelp` 只是快捷命令。飞书/微信里用 `/fhelp`。旧的 `/help` 仍兼容，但不再作为主要入口。
 
+### 可选：本地 Claude 启动器覆盖
+
+默认情况下，`im2cc` 会直接调用系统里的 `claude` 命令，这也是开源用户的默认路径。
+
+如果你在自己电脑上有一个本地 Claude 启动脚本，想让 `fn` 创建 Claude 对话前先弹出“选择渠道 / profile”的菜单，可以在 `~/.im2cc/config.json` 里额外加一项：
+
+```json
+{
+  "claudeLauncher": "~/claude-start.sh"
+}
+```
+
+启用后：
+
+- 仅你的本机会改为调用这个脚本；未配置该项的用户行为完全不变。
+- 电脑终端里的 `fn <名称>` 会先让你选择 profile，再创建 Claude 对话。
+- 同一个 session 后续的发送、恢复也会沿用这次选择的 profile。
+- 飞书/微信里的 `/fn` 在该模式下不会为 Claude 弹菜单，因为后台没有 TTY；如需选 profile，请先回电脑执行 `fn`，或在 IM 里直接创建 `codex` / `gemini` 会话。
+
 ## 安全与隐私
 
 im2cc 完全在你自己的电脑上运行，你的代码和对话内容不会经过任何第三方服务器。飞书和微信仅用于传递消息文本。
