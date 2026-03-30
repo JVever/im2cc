@@ -21,6 +21,7 @@
   "license": "GPL-3.0-only",
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.59.0",
+    "axios": "^1.13.6",
     "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {

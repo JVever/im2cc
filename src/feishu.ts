@@ -6,6 +6,7 @@
 
 import fs from 'node:fs'
 import * as lark from '@larksuiteoapi/node-sdk'
+import axios from 'axios'
 import type { Im2ccConfig } from './config.js'
 import type { TransportAdapter, IncomingMessage } from './transport.js'
 import { getCursor, setCursor, initCursorIfMissing } from './poll-cursor.js'
@@ -14,6 +15,8 @@ import { log, error } from './logger.js'
 // --- Bot 群列表缓存 ---
 
 interface BotChat { chatId: string }
+
+const FEISHU_REQUEST_TIMEOUT_MS = 15_000
 
 export class FeishuAdapter implements TransportAdapter {
   readonly type = 'feishu' as const
@@ -27,13 +30,14 @@ export class FeishuAdapter implements TransportAdapter {
     if (!appId || !appSecret) {
       throw new Error('飞书 App ID 或 App Secret 未配置。请运行 im2cc setup')
     }
-    this.client = new lark.Client({ appId, appSecret, appType: lark.AppType.SelfBuild })
+    this.client = this.createClient()
   }
 
   async start(onMessage: (msg: IncomingMessage) => Promise<void>): Promise<void> {
     // 验证凭证
     try {
-      const resp = await this.client.request({ method: 'GET', url: '/open-apis/bot/v3/info/' })
+      const resp = await this.runRequest('获取 Bot 信息', () =>
+        this.client.request({ method: 'GET', url: '/open-apis/bot/v3/info/' }))
       const botData = resp?.data as Record<string, unknown> | undefined
       const botInfo = botData?.bot as Record<string, string> | undefined
       log(`飞书 Bot 已连接: ${botInfo?.app_name ?? 'unknown'} (${botInfo?.open_id ?? ''})`)
@@ -97,10 +101,11 @@ export class FeishuAdapter implements TransportAdapter {
   /** 给消息添加表情回应（确认收到） */
   async addReaction(messageId: string, emojiType: string = 'OnIt'): Promise<void> {
     try {
-      await this.client.im.messageReaction.create({
-        path: { message_id: messageId },
-        data: { reaction_type: { emoji_type: emojiType } },
-      })
+      await this.runRequest(`添加消息表情 ${messageId}`, () =>
+        this.client.im.messageReaction.create({
+          path: { message_id: messageId },
+          data: { reaction_type: { emoji_type: emojiType } },
+        }))
     } catch {
       // 非关键功能，失败不影响主流程
     }
@@ -108,14 +113,15 @@ export class FeishuAdapter implements TransportAdapter {
 
   async sendText(conversationId: string, text: string): Promise<void> {
     try {
-      await this.client.im.message.create({
-        params: { receive_id_type: 'chat_id' },
-        data: {
-          receive_id: conversationId,
-          msg_type: 'text',
-          content: JSON.stringify({ text }),
-        },
-      })
+      await this.runRequest(`发送消息到 ${conversationId}`, () =>
+        this.client.im.message.create({
+          params: { receive_id_type: 'chat_id' },
+          data: {
+            receive_id: conversationId,
+            msg_type: 'text',
+            content: JSON.stringify({ text }),
+          },
+        }))
     } catch (err) {
       error(`发送飞书消息失败 [${conversationId}]: ${err}`)
       throw err
@@ -130,10 +136,11 @@ export class FeishuAdapter implements TransportAdapter {
   ): Promise<void> {
     const tmpPath = destPath + '.tmp.' + process.pid
     try {
-      const resp = await this.client.im.messageResource.get({
-        path: { message_id: messageId, file_key: fileKey },
-        params: { type: msgType as 'image' | 'file' },
-      })
+      const resp = await this.runRequest(`下载消息资源 ${messageId}`, () =>
+        this.client.im.messageResource.get({
+          path: { message_id: messageId, file_key: fileKey },
+          params: { type: msgType as 'image' | 'file' },
+        }))
 
       if (resp && typeof (resp as Record<string, unknown>).writeFile === 'function') {
         await (resp as unknown as { writeFile(p: string): Promise<void> }).writeFile(tmpPath)
@@ -151,6 +158,49 @@ export class FeishuAdapter implements TransportAdapter {
 
   // --- 内部方法 ---
 
+  private createClient(): lark.Client {
+    const httpInstance = axios.create({ timeout: FEISHU_REQUEST_TIMEOUT_MS })
+
+    httpInstance.interceptors.request.use((req) => {
+      if (req.headers) req.headers['User-Agent'] = 'oapi-node-sdk/1.0.0'
+      return req
+    }, undefined, { synchronous: true })
+
+    httpInstance.interceptors.response.use((resp) => {
+      const requestConfig = resp.config as unknown as { $return_headers?: boolean }
+      if (requestConfig.$return_headers) {
+        return { data: resp.data, headers: resp.headers }
+      }
+      return resp.data
+    })
+
+    return new lark.Client({
+      appId: this.config.feishu.appId,
+      appSecret: this.config.feishu.appSecret,
+      appType: lark.AppType.SelfBuild,
+      httpInstance,
+    })
+  }
+
+  private isTimeoutError(err: unknown): boolean {
+    if (!err || typeof err !== 'object') return false
+    const candidate = err as { code?: string, message?: string }
+    return candidate.code === 'ECONNABORTED'
+      || candidate.message?.includes(`timeout of ${FEISHU_REQUEST_TIMEOUT_MS}ms exceeded`) === true
+  }
+
+  private async runRequest<T>(label: string, fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn()
+    } catch (err) {
+      if (this.isTimeoutError(err)) {
+        error(`[feishu] ${label} 超时 (${FEISHU_REQUEST_TIMEOUT_MS}ms)，重建客户端`)
+        this.client = this.createClient()
+      }
+      throw err
+    }
+  }
+
   private async refreshBotGroups(): Promise<BotChat[]> {
     if (Date.now() - this.chatsCachedAt < this.CHAT_CACHE_TTL && this.cachedChats.length > 0) {
       return this.cachedChats
@@ -160,9 +210,10 @@ export class FeishuAdapter implements TransportAdapter {
     let pageToken: string | undefined
 
     do {
-      const resp = await this.client.im.chat.list({
-        params: { page_size: 100, ...(pageToken ? { page_token: pageToken } : {}) },
-      })
+      const resp = await this.runRequest('拉取群列表', () =>
+        this.client.im.chat.list({
+          params: { page_size: 100, ...(pageToken ? { page_token: pageToken } : {}) },
+        }))
       for (const item of resp?.data?.items ?? []) {
         if (item.chat_id) chats.push({ chatId: item.chat_id })
       }
@@ -181,16 +232,17 @@ export class FeishuAdapter implements TransportAdapter {
     let pageToken: string | undefined
 
     do {
-      const resp = await this.client.im.message.list({
-        params: {
-          container_id_type: 'chat',
-          container_id: chatId,
-          start_time: cursor,
-          sort_type: 'ByCreateTimeAsc',
-          page_size: 50,
-          ...(pageToken ? { page_token: pageToken } : {}),
-        },
-      })
+      const resp = await this.runRequest(`拉取群 ${chatId} 消息`, () =>
+        this.client.im.message.list({
+          params: {
+            container_id_type: 'chat',
+            container_id: chatId,
+            start_time: cursor,
+            sort_type: 'ByCreateTimeAsc',
+            page_size: 50,
+            ...(pageToken ? { page_token: pageToken } : {}),
+          },
+        }))
       for (const item of resp?.data?.items ?? []) {
         items.push(item as Record<string, unknown>)
       }
