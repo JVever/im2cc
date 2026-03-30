@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const recap = await import(path.join(rootDir, 'dist', 'src', 'recap.js'))
 
-test('buildRecapMessages keeps short recent turn in a single message', () => {
+test('buildRecapMessages sends intro and recent turn as separate messages', () => {
   const messages = recap.buildRecapMessages({
     user: '最近这个功能修好了吗？',
     assistant: '修好了，已经补了测试并验证通过。',
@@ -15,11 +15,12 @@ test('buildRecapMessages keeps short recent turn in a single message', () => {
     transport: 'feishu',
   })
 
-  assert.equal(messages.length, 1)
+  assert.equal(messages.length, 2)
   assert.match(messages[0], /✅ 已接入 "demo" \[codex\]/)
-  assert.match(messages[0], /📋 最近一轮对话 1\/1/)
-  assert.match(messages[0], /【你】\n最近这个功能修好了吗？/)
-  assert.match(messages[0], /【AI】\n修好了，已经补了测试并验证通过。/)
+  assert.doesNotMatch(messages[0], /📋 最近一轮对话/)
+  assert.match(messages[1], /📋 最近一轮对话 1\/1/)
+  assert.match(messages[1], /【你】\n最近这个功能修好了吗？/)
+  assert.match(messages[1], /【AI】\n修好了，已经补了测试并验证通过。/)
 })
 
 test('buildRecapMessages splits long assistant replies and keeps labels explicit', () => {
@@ -49,6 +50,22 @@ test('buildRecapMessages never exceeds three messages', () => {
   })
 
   assert.equal(messages.length, 3)
+})
+
+test('buildRecapMessages keeps total count within three when intro is separate', () => {
+  const assistant = '内容'.repeat(15000)
+  const messages = recap.buildRecapMessages({
+    user: '请继续。',
+    assistant,
+  }, {
+    intro: '✅ 已接入 "demo" [codex]\n📁 im2cc',
+    transport: 'wechat',
+  })
+
+  assert.equal(messages.length, 3)
+  assert.equal(messages[0], '✅ 已接入 "demo" [codex]\n📁 im2cc')
+  assert.match(messages[1], /📋 最近一轮对话 1\/2/)
+  assert.match(messages[2], /📋 最近一轮对话 2\/2/)
 })
 
 test('buildRecapMessages truncates from the front when the latest AI reply still exceeds three messages', () => {

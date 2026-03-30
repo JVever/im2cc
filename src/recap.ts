@@ -45,24 +45,26 @@ export function buildRecapMessages(
   if (maxMessages <= 0) return []
 
   const messageLimit = MSG_LENGTH_LIMIT[transport] ?? 28000
-  const firstLimit = Math.max(400, messageLimit - intro.length - 96)
-  const otherLimit = Math.max(400, messageLimit - 56)
-  const limits = [firstLimit, ...Array.from({ length: maxMessages - 1 }, () => otherLimit)]
+  const recapBudget = Math.max(0, maxMessages - (intro ? 1 : 0))
+  if (recapBudget <= 0) return intro ? [intro] : []
+
+  const recapLimit = Math.max(400, messageLimit - 56)
+  const limits = Array.from({ length: recapBudget }, () => recapLimit)
 
   const userText = normalizeRecapText(turn.user)
   const assistantText = normalizeRecapText(turn.assistant)
   const bodies = packTurnBodies(userText, assistantText, limits)
     ?? packTruncatedAssistantBodies(userText, assistantText, limits)
 
-  if (!bodies || bodies.length === 0) return []
+  if (!bodies || bodies.length === 0) return intro ? [intro] : []
 
-  return bodies.map((body, index) => {
+  const recapMessages = bodies.map((body, index) => {
     const title = `📋 最近一轮对话 ${index + 1}/${bodies.length}`
-    if (index === 0 && intro) {
-      return `${intro}\n\n${title}\n\n${body}`
-    }
     return `${title}\n\n${body}`
   })
+
+  if (intro) return [intro, ...recapMessages]
+  return recapMessages
 }
 
 function packTruncatedAssistantBodies(userText: string, assistantText: string, limits: number[]): string[] | null {
