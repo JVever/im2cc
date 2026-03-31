@@ -1,6 +1,6 @@
 /**
  * @input:    ~/.im2cc/config.json (飞书凭证、白名单、默认参数), ~/.im2cc/wechat-account.json
- * @output:   loadConfig(), saveConfig(), getDataDir(), getDaemonLockDir(), getMessageDedupDir(), loadWeChatAccount(), saveWeChatAccount() — 配置读写和数据目录管理
+ * @output:   loadConfig(), saveConfig(), getDataDir(), getDaemonLockDir(), getMessageDedupDir(), getAntiPomodoroFile(), loadWeChatAccount(), saveWeChatAccount() — 配置读写和数据目录管理
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -34,6 +34,7 @@ const DAEMON_LOCK_DIR = path.join(CONFIG_DIR, 'daemon.lock')
 const INFLIGHT_DIR = path.join(DATA_DIR, 'inflight')
 const PENDING_FILE = path.join(DATA_DIR, 'pending.json')
 const MESSAGE_DEDUP_DIR = path.join(DATA_DIR, 'message-dedup')
+const ANTI_POMODORO_FILE = path.join(DATA_DIR, 'anti-pomodoro.json')
 
 const DEFAULT_CONFIG: Im2ccConfig = {
   feishu: { appId: '', appSecret: '' },
@@ -105,6 +106,7 @@ export function getMessageDedupDir(): string {
   if (!fs.existsSync(MESSAGE_DEDUP_DIR)) fs.mkdirSync(MESSAGE_DEDUP_DIR, { recursive: true })
   return MESSAGE_DEDUP_DIR
 }
+export function getAntiPomodoroFile(): string { ensureDirs(); return ANTI_POMODORO_FILE }
 
 // --- 默认模式 ---
 

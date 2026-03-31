@@ -13,3 +13,6 @@ fl()       { im2cc list; }
 fk()       { im2cc delete "$@"; }
 fd()       { im2cc detach; }
 fs()       { im2cc show "$@"; }
+fqon()     { im2cc fqon "$@"; }
+fqoff()    { im2cc fqoff "$@"; }
+fqs()      { im2cc fqs "$@"; }

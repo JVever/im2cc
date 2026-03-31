@@ -1,6 +1,6 @@
 /**
  * @input:    Im2ccConfig, Transport adapters, AI coding tool CLIs, recap, file-staging
- * @output:   startDaemon() — 主入口：初始化各模块、守护进程单实例锁、启动 transport 轮询、消息路由、/fc 上下文回顾、文件暂存与合并
+ * @output:   startDaemon() — 主入口：初始化各模块、守护进程单实例锁、启动 transport 轮询、消息路由、/fc 上下文回顾、文件暂存与合并、反茄钟闸门
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -23,6 +23,14 @@ import { stageFile, consumeStaged, ensureInbox, classifyFile, runInboxCleanup } 
 import { buildRecapMessages } from './recap.js'
 import { log, error } from './logger.js'
 import type { TransportAdapter, IncomingMessage, TransportType } from './transport.js'
+import {
+  ANTI_POMODORO_IM_COMMANDS,
+  AntiPomodoroDaemonController,
+  claimRestQuota,
+  formatAntiPomodoroRemaining,
+  getAntiPomodoroSnapshot,
+  queueDelayedReply,
+} from './anti-pomodoro.js'
 import {
   DAEMON_LOCK_STARTUP_GRACE_MS,
   DAEMON_MARKER,
@@ -186,6 +194,9 @@ export async function startDaemon(): Promise<void> {
 
   // --- Transport adapters ---
   const adapters = new Map<TransportType, TransportAdapter>()
+  const antiPomodoro = new AntiPomodoroDaemonController(
+    async (conversationId, text) => sendByConversationId(conversationId, text),
+  )
 
   /** 通过 transport 类型找到对应 adapter 发送消息 */
   function sendToConversation(transport: TransportType, conversationId: string, text: string): Promise<void> {
@@ -226,9 +237,18 @@ export async function startDaemon(): Promise<void> {
     }
 
     const send = (text: string) => sendToConversation(transport, conversationId, text)
+    const antiPomodoroSnapshot = getAntiPomodoroSnapshot()
 
     // 文件消息处理
     if (msg.kind === 'file') {
+      if (antiPomodoroSnapshot.enabled && antiPomodoroSnapshot.phase === 'rest') {
+        await send([
+          '⛔ 现在是休息时间，暂不接受文件或图片。',
+          `请等 ${formatAntiPomodoroRemaining(antiPomodoroSnapshot.remainingMs)} 后进入下一个工作窗口再发送。`,
+        ].join('\n'))
+        return
+      }
+
       react('EYES')  // 👀 已收到文件
       log(`收到文件 [${conversationId}] ${senderId}: ${msg.fileName}`)
 
@@ -291,6 +311,15 @@ export async function startDaemon(): Promise<void> {
     const cmd = parseCommand(text!)
 
     if (cmd) {
+      if (antiPomodoroSnapshot.enabled && antiPomodoroSnapshot.phase === 'rest'
+        && !ANTI_POMODORO_IM_COMMANDS.has(cmd.command)) {
+        await send([
+          '⛔ 现在是休息时间，当前不接受这个命令。',
+          `请等 ${formatAntiPomodoroRemaining(antiPomodoroSnapshot.remainingMs)} 后进入下一个工作窗口再继续。`,
+        ].join('\n'))
+        return
+      }
+
       // 命令场景化表情
       const cmdEmoji: Record<string, string> = {
         fc: 'THUMBSUP',       // 👍 接入成功
@@ -301,6 +330,9 @@ export async function startDaemon(): Promise<void> {
         fn: 'THUMBSUP',       // 👍 创建成功
         mode: 'OK',           // 👌 设置
         stop: 'DONE',         // ✅ 中断完成
+        fqon: 'OK',
+        fqoff: 'OK',
+        fqs: 'OK',
       }
       react(cmdEmoji[cmd.command] ?? 'OK')
 
@@ -367,6 +399,12 @@ export async function startDaemon(): Promise<void> {
         return
       }
 
+      const quotaDecision = claimRestQuota()
+      if (!quotaDecision.allowed) {
+        await send(quotaDecision.rejection!)
+        return
+      }
+
       // 合并暂存文件
       const staged = consumeStaged(conversationId)
       let prompt = text!
@@ -383,10 +421,17 @@ export async function startDaemon(): Promise<void> {
         ].join('\n')
       }
 
+      if (quotaDecision.notice) {
+        await send(quotaDecision.notice)
+      }
+
       enqueue(
         conversationId,
         prompt,
-        (reply) => send(reply),
+        async (reply) => {
+          if (queueDelayedReply(conversationId, reply)) return
+          await send(reply)
+        },
         config.defaultTimeoutSeconds,
       )
     }
@@ -425,10 +470,18 @@ export async function startDaemon(): Promise<void> {
     throw new Error('没有可用的 transport，请先配置可用的 IM 通道（im2cc setup / im2cc wechat login）')
   }
 
+  antiPomodoro.start()
+
   // 恢复上次中断的任务
   await recoverOnStartup(
-    (conversationId, text) => sendByConversationId(conversationId, text),
-    (conversationId) => (text: string) => sendByConversationId(conversationId, text),
+    async (conversationId, text) => {
+      if (queueDelayedReply(conversationId, text)) return
+      await sendByConversationId(conversationId, text)
+    },
+    (conversationId) => async (text: string) => {
+      if (queueDelayedReply(conversationId, text)) return
+      await sendByConversationId(conversationId, text)
+    },
     config.defaultTimeoutSeconds,
   )
 

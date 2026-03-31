@@ -62,6 +62,10 @@ test('help and mode list surface aliases for mobile input', async () => {
   assert.match(helpOutput, /\/mode\s+— 查看可用模式/)
   assert.match(helpOutput, /\/mode <模式别名>/)
   assert.match(helpOutput, /例如 \/mode au/)
+  assert.match(helpOutput, /fqon\s+— 开启反茄钟/)
+  assert.match(helpOutput, /fqoff\s+— 关闭反茄钟/)
+  assert.match(helpOutput, /\/fqon\s+— 开启反茄钟/)
+  assert.match(helpOutput, /\/fqs\s+— 查看反茄钟状态/)
   assert.match(helpOutput, /飞书支持发送图片或文件；发送后再补一条指令即可让当前接入的 AI 工具分析/)
   assert.match(helpOutput, /微信当前以纯文本对话为主/)
   assert.doesNotMatch(helpOutput, /\/fn <名称> <项目>/)
@@ -91,6 +95,29 @@ test('mode aliases switch current session mode and default mode', async () => {
   const defaultOutput = await commands.handleCommand(defaultCmd, 'conv-mode', configMod.loadConfig())
   assert.match(defaultOutput, /默认模式已设为 acceptEdits/)
   assert.equal(configMod.getDefaultMode('claude', configMod.loadConfig()), 'acceptEdits')
+})
+
+test('anti-pomodoro IM commands expose on/status and block mobile off', async () => {
+  resetState()
+  const config = configForTests()
+  configMod.saveConfig(config)
+
+  const onCmd = commands.parseCommand('/fqon')
+  assert.ok(onCmd)
+  const onOutput = await commands.handleCommand(onCmd, 'conv-rest', config)
+  assert.match(onOutput, /反茄钟已开启/)
+  assert.match(onOutput, /当前阶段: 工作时间/)
+
+  const statusCmd = commands.parseCommand('/fqs')
+  assert.ok(statusCmd)
+  const statusOutput = await commands.handleCommand(statusCmd, 'conv-rest', config)
+  assert.match(statusOutput, /反茄钟进行中/)
+  assert.match(statusOutput, /关闭方式: 只能在电脑端 fqoff/)
+
+  const offCmd = commands.parseCommand('/fqoff')
+  assert.ok(offCmd)
+  const offOutput = await commands.handleCommand(offCmd, 'conv-rest', config)
+  assert.match(offOutput, /只能在电脑端关闭/)
 })
 
 test('/fl groups sessions by tool, sorts names, and keeps cwd basename', async () => {

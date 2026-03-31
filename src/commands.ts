@@ -1,6 +1,6 @@
 /**
  * @input:    用户消息文本, Im2ccConfig, Binding
- * @output:   parseCommand(), handleCommand() — 命令解析与执行（含 /fc 双参数注册模式）
+ * @output:   parseCommand(), handleCommand() — 命令解析与执行（含 /fc 双参数注册模式、/fqon /fqoff /fqs）
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -19,6 +19,7 @@ import { isBestEffortTool, supportedToolChoices, supportedToolList } from './sup
 import { resumeCommand } from './tool-cli-args.js'
 import type { RegisteredSession } from './registry.js'
 import { hasCustomClaudeLauncher } from './claude-launcher.js'
+import { enableAntiPomodoro, formatAntiPomodoroStatus, getAntiPomodoroSnapshot } from './anti-pomodoro.js'
 
 export interface ParsedCommand {
   command: string
@@ -37,7 +38,7 @@ function validateSessionProjectPath(rawPath: string, config: Im2ccConfig): { ok:
 }
 
 // 统一命令名：电脑端和飞书端尽量保持一致；/help 仅作兼容别名保留
-const COMMANDS = new Set(['fn', 'fc', 'fl', 'fk', 'fs', 'fd', 'mode', 'stop', 'help', 'fhelp'])
+const COMMANDS = new Set(['fn', 'fc', 'fl', 'fk', 'fs', 'fd', 'mode', 'stop', 'help', 'fhelp', 'fqon', 'fqoff', 'fqs'])
 
 export function parseCommand(text: string): ParsedCommand | null {
   const trimmed = text.trim()
@@ -62,6 +63,9 @@ export async function handleCommand(
     case 'fd': return handleFd(conversationId)
     case 'mode': return handleMode(cmd.args, conversationId, config)
     case 'stop': return handleStop(conversationId)
+    case 'fqon': return handleFqOn()
+    case 'fqoff': return handleFqOff()
+    case 'fqs': return handleFqStatus()
     case 'fhelp':
     case 'help': return handleHelp()
     default: return `未知命令: /${cmd.command}`
@@ -527,6 +531,21 @@ async function handleFs(conversationId: string): Promise<string> {
   return buildSessionStatus(binding)
 }
 
+function handleFqOn(): string {
+  return enableAntiPomodoro().message
+}
+
+function handleFqOff(): string {
+  return [
+    '❌ 反茄钟只能在电脑端关闭。',
+    formatAntiPomodoroStatus(getAntiPomodoroSnapshot()),
+  ].join('\n')
+}
+
+function handleFqStatus(): string {
+  return formatAntiPomodoroStatus(getAntiPomodoroSnapshot())
+}
+
 export function renderUnifiedHelp(): string {
   return [
     '📖 im2cc 帮助',
@@ -545,6 +564,9 @@ export function renderUnifiedHelp(): string {
     'fk <名称>                — 终止对话',
     'fd                       — 断开当前对话',
     'fs <名称>                — 查看对话状态',
+    'fqon                     — 开启反茄钟',
+    'fqoff                    — 关闭反茄钟',
+    'fqs                      — 查看反茄钟状态',
     '',
     '飞书 / 微信：',
     '/fhelp                   — 查看帮助',
@@ -556,6 +578,9 @@ export function renderUnifiedHelp(): string {
     '/mode                    — 查看可用模式',
     '/mode <模式别名>         — 切换模式（例如 /mode au）',
     '/stop                    — 中断当前执行',
+    '/fqon                    — 开启反茄钟',
+    '/fqs                     — 查看反茄钟状态',
+    '/fqoff                   — 仅提示需回到电脑端关闭',
     '',
     '直接发消息即转给当前接入的 AI 工具',
     '',

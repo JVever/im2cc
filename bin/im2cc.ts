@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * @input:    CLI 参数 (start/stop/status/logs/sessions/new/connect/list/delete/detach/show/setup/secure/onboard/install-service/doctor/help/upgrade/wechat)
+ * @input:    CLI 参数 (start/stop/status/logs/sessions/new/connect/list/delete/detach/show/setup/secure/onboard/install-service/doctor/help/upgrade/wechat/fqon/fqoff/fqs)
  * @output:   守护进程管理 + 完整 session 管理命令（new/connect/list/delete/detach/show）
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
@@ -22,6 +22,7 @@ import { claudeSupportsSessionNameFlag } from '../src/tool-compat.js'
 import { renderRegisteredSessionList, renderUnifiedHelp } from '../src/commands.js'
 import { detectInstallRoot, listReplaceableInstallEntries, PUBLIC_ARCHIVE_URL } from '../src/upgrade.js'
 import { hasCustomClaudeLauncher, selectClaudeProfile } from '../src/claude-launcher.js'
+import { disableAntiPomodoro, enableAntiPomodoro, formatAntiPomodoroStatus, getAntiPomodoroSnapshot } from '../src/anti-pomodoro.js'
 import readline from 'node:readline'
 
 // 触发各 driver 自注册（模块级副作用）
@@ -211,6 +212,9 @@ switch (command) {
   case 'fhelp': cmdHelp(); break
   case 'upgrade': await cmdUpgrade(); break
   case 'wechat': await cmdWeChat(); break
+  case 'fqon': cmdFqOn(); break
+  case 'fqoff': cmdFqOff(); break
+  case 'fqs': cmdFqStatus(); break
   default:
     console.log(`im2cc — IM to AI coding tools
 
@@ -243,10 +247,13 @@ switch (command) {
   wechat status      查看微信连接状态
   wechat logout      解除微信绑定
 
-运维:
+  运维:
   sessions           列出活跃绑定
   install-service    安装 macOS 开机自启
   doctor             检查环境
+  fqon               开启反茄钟
+  fqoff              关闭反茄钟
+  fqs                查看反茄钟状态
   help               查看统一帮助
   fhelp              查看统一帮助（help 的别名）
   upgrade            升级到最新版本
@@ -476,22 +483,39 @@ function cmdStop(): void {
 
 function cmdStatus(): void {
   const state = inspectLocalDaemonState()
+  const antiPomodoro = getAntiPomodoroSnapshot()
   if (state.kind === 'running') {
     const bindings = listActiveBindings()
     console.log(`🟢 守护进程运行中 (PID: ${state.pids.join(', ')})`)
     console.log(`   活跃绑定: ${bindings.length}`)
+    console.log(`   反茄钟: ${antiPomodoro.enabled ? '进行中' : '未开启'}`)
     return
   }
   if (state.kind === 'starting') {
     console.log('🟡 守护进程启动中')
+    console.log(`   反茄钟: ${antiPomodoro.enabled ? '进行中' : '未开启'}`)
     return
   }
   if (state.kind === 'stale') {
     cleanupStaleDaemonState()
     console.log('⬤ 守护进程未运行 (已清理残留状态)')
+    console.log(`   反茄钟: ${antiPomodoro.enabled ? '进行中' : '未开启'}`)
     return
   }
   console.log('⬤ 守护进程未运行')
+  console.log(`   反茄钟: ${antiPomodoro.enabled ? '进行中' : '未开启'}`)
+}
+
+function cmdFqOn(): void {
+  console.log(enableAntiPomodoro().message)
+}
+
+function cmdFqOff(reason?: string): void {
+  console.log(disableAntiPomodoro(reason).message)
+}
+
+function cmdFqStatus(): void {
+  console.log(formatAntiPomodoroStatus(getAntiPomodoroSnapshot()))
 }
 
 function cmdLogs(): void {
@@ -581,6 +605,11 @@ async function cmdNew(): Promise<void> {
 
   const toolLabel = tool !== 'claude' ? ` [${tool}]` : ''
   console.log(`创建新对话 "${name}"${toolLabel} → ${validation.resolvedPath}...`)
+  const autoDisable = disableAntiPomodoro('已回到电脑端工作，反茄钟自动关闭。')
+  if (autoDisable.changed) {
+    console.log(autoDisable.message)
+    console.log('')
+  }
 
   try {
     const driver = getDriver(tool)
@@ -684,6 +713,12 @@ async function cmdConnect(): Promise<void> {
   registerWithMeta(session.name, session.sessionId, session.cwd, session.tool ?? 'claude', { claudeProfile: session.claudeProfile })
 
   let tool = session.tool ?? 'claude'
+
+  const autoDisable = disableAntiPomodoro('已回到电脑端工作，反茄钟自动关闭。')
+  if (autoDisable.changed) {
+    console.log(autoDisable.message)
+    console.log('')
+  }
 
   // 断开前同步：检查 session 是否漂移（Plan 模式等）
   if (tool === 'claude') {
@@ -791,6 +826,12 @@ async function cmdConnectDoubleArg(newName: string, query: string): Promise<void
   // 注册
   register(newName, sessionId, cwd, 'claude')
   console.log(`✅ 已注册 "${newName}" → ${path.basename(cwd)} [${sessionId.slice(0, 8)}]`)
+
+  const autoDisable = disableAntiPomodoro('已回到电脑端工作，反茄钟自动关闭。')
+  if (autoDisable.changed) {
+    console.log(autoDisable.message)
+    console.log('')
+  }
 
   // 解绑远程端
   await releaseRemoteBinding(sessionId, newName)
@@ -1186,6 +1227,7 @@ function cmdDoctor(): void {
   // 注册表 / 活跃绑定
   console.log(`已注册对话: ${snapshot.registeredCount}${snapshot.registeredCount === 0 ? ' (先进入项目目录后用 fn <名称> 创建)' : ''}`)
   console.log(`活跃绑定: ${snapshot.bindingCount}`)
+  console.log(`反茄钟: ${getAntiPomodoroSnapshot().enabled ? '✅ 进行中' : '⬤ 未开启'}`)
 
   // PID 检查
   const daemonState = snapshot.daemonState
