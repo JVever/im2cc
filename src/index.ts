@@ -27,7 +27,8 @@ import {
   ANTI_POMODORO_IM_COMMANDS,
   AntiPomodoroDaemonController,
   claimRestQuota,
-  formatAntiPomodoroRemaining,
+  formatAntiPomodoroRestCommandBlocked,
+  formatAntiPomodoroRestFileBlocked,
   getAntiPomodoroSnapshot,
   queueDelayedReply,
 } from './anti-pomodoro.js'
@@ -242,10 +243,7 @@ export async function startDaemon(): Promise<void> {
     // 文件消息处理
     if (msg.kind === 'file') {
       if (antiPomodoroSnapshot.enabled && antiPomodoroSnapshot.phase === 'rest') {
-        await send([
-          '⛔ 现在是休息时间，暂不接受文件或图片。',
-          `请等 ${formatAntiPomodoroRemaining(antiPomodoroSnapshot.remainingMs)} 后进入下一个工作窗口再发送。`,
-        ].join('\n'))
+        await send(formatAntiPomodoroRestFileBlocked(antiPomodoroSnapshot))
         return
       }
 
@@ -313,10 +311,7 @@ export async function startDaemon(): Promise<void> {
     if (cmd) {
       if (antiPomodoroSnapshot.enabled && antiPomodoroSnapshot.phase === 'rest'
         && !ANTI_POMODORO_IM_COMMANDS.has(cmd.command)) {
-        await send([
-          '⛔ 现在是休息时间，当前不接受这个命令。',
-          `请等 ${formatAntiPomodoroRemaining(antiPomodoroSnapshot.remainingMs)} 后进入下一个工作窗口再继续。`,
-        ].join('\n'))
+        await send(formatAntiPomodoroRestCommandBlocked(antiPomodoroSnapshot))
         return
       }
 

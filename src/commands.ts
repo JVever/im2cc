@@ -19,7 +19,12 @@ import { isBestEffortTool, supportedToolChoices, supportedToolList } from './sup
 import { resumeCommand } from './tool-cli-args.js'
 import type { RegisteredSession } from './registry.js'
 import { hasCustomClaudeLauncher } from './claude-launcher.js'
-import { enableAntiPomodoro, formatAntiPomodoroStatus, getAntiPomodoroSnapshot } from './anti-pomodoro.js'
+import {
+  enableAntiPomodoro,
+  formatAntiPomodoroRemoteOffDenied,
+  formatAntiPomodoroStatus,
+  getAntiPomodoroSnapshot,
+} from './anti-pomodoro.js'
 
 export interface ParsedCommand {
   command: string
@@ -536,10 +541,7 @@ function handleFqOn(): string {
 }
 
 function handleFqOff(): string {
-  return [
-    '❌ 反茄钟只能在电脑端关闭。',
-    formatAntiPomodoroStatus(getAntiPomodoroSnapshot()),
-  ].join('\n')
+  return formatAntiPomodoroRemoteOffDenied(getAntiPomodoroSnapshot())
 }
 
 function handleFqStatus(): string {

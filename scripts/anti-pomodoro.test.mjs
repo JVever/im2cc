@@ -21,13 +21,14 @@ test('anti-pomodoro rest quota is single-use and delayed replies flush on next w
   const t0 = Date.UTC(2026, 0, 1, 0, 0, 0)
   const workStart = antiPomodoro.enableAntiPomodoro(t0)
   assert.equal(workStart.changed, true)
-  assert.match(workStart.message, /反茄钟已开启/)
+  assert.match(workStart.message, /已开启反茄钟/)
   assert.equal(workStart.snapshot.phase, 'work')
 
   const restAt = t0 + antiPomodoro.ANTI_POMODORO_WORK_MS + 1000
   const firstClaim = antiPomodoro.claimRestQuota(restAt)
   assert.equal(firstClaim.allowed, true)
-  assert.match(firstClaim.notice, /唯一后台指令额度已经用完/)
+  assert.match(firstClaim.notice, /已使用本轮休息期后台指令/)
+  assert.match(firstClaim.notice, /结果会在下一个工作窗口再发回手机/)
   assert.equal(firstClaim.snapshot.phase, 'rest')
   assert.equal(firstClaim.snapshot.restQuotaUsed, true)
 
@@ -39,7 +40,8 @@ test('anti-pomodoro rest quota is single-use and delayed replies flush on next w
   assert.equal(queued, true)
 
   const restStatus = antiPomodoro.formatAntiPomodoroStatus(antiPomodoro.getAntiPomodoroSnapshot(restAt + 3000))
-  assert.match(restStatus, /当前阶段: 休息时间/)
+  assert.match(restStatus, /阶段：休息时间/)
+  assert.match(restStatus, /范围：飞书、微信、不同对话全局共享/)
   assert.doesNotMatch(restStatus, /待送达/)
 
   const nextWorkAt = restAt + antiPomodoro.ANTI_POMODORO_REST_MS + 1000
@@ -59,7 +61,8 @@ test('disable clears anti-pomodoro state back to normal', () => {
 
   const disabled = antiPomodoro.disableAntiPomodoro('已回到电脑端工作。', t0 + 2000)
   assert.equal(disabled.changed, true)
-  assert.match(disabled.message, /反茄钟已关闭/)
+  assert.match(disabled.message, /已关闭反茄钟/)
+  assert.match(disabled.message, /原因：已回到电脑端工作。/)
 
   const snapshot = antiPomodoro.getAntiPomodoroSnapshot(t0 + 3000)
   assert.equal(snapshot.enabled, false)

@@ -211,42 +211,72 @@ export function formatAntiPomodoroRemaining(ms: number): string {
   return formatDuration(ms)
 }
 
-export function formatAntiPomodoroStatus(snapshot: AntiPomodoroSnapshot): string {
+function renderCard(title: string, lines: string[]): string {
+  return [title, '', ...lines].join('\n')
+}
+
+function statusLines(snapshot: AntiPomodoroSnapshot): string[] {
   if (!snapshot.enabled) {
     return [
-      '反茄钟未开启',
-      '当前为正常收发状态',
-      '电脑端可用 fqon 开启',
-    ].join('\n')
+      '状态：未开启',
+      '当前：正常收发',
+      '开启：电脑端 fqon 或手机端 /fqon',
+    ]
   }
 
   const phaseLabel = snapshot.phase === 'rest' ? '休息时间' : '工作时间'
   const lines = [
-    '反茄钟进行中',
-    `当前阶段: ${phaseLabel}`,
-    `剩余时间: ${formatDuration(snapshot.remainingMs)}`,
-    `节奏: ${Math.floor(snapshot.workMs / 60000)} 分钟工作 / ${Math.floor(snapshot.restMs / 60000)} 分钟休息`,
+    '状态：进行中',
+    `阶段：${phaseLabel}`,
+    `剩余：${formatDuration(snapshot.remainingMs)}`,
+    `节奏：${Math.floor(snapshot.workMs / 60000)} 分钟工作 / ${Math.floor(snapshot.restMs / 60000)} 分钟休息`,
+    '范围：飞书、微信、不同对话全局共享',
   ]
 
   if (snapshot.phase === 'rest') {
-    lines.push(`本轮休息期后台指令: ${snapshot.restQuotaUsed ? '已用完' : '可用 1 次'}`)
+    lines.push(`休息期后台指令：${snapshot.restQuotaUsed ? '已用完' : '可用 1 次'}`)
   }
 
-  lines.push('关闭方式: 只能在电脑端 fqoff')
-  return lines.join('\n')
+  lines.push('关闭：电脑端 fqoff')
+  return lines
+}
+
+export function formatAntiPomodoroStatus(snapshot: AntiPomodoroSnapshot): string {
+  return renderCard('反茄钟', statusLines(snapshot))
+}
+
+export function formatAntiPomodoroRemoteOffDenied(snapshot: AntiPomodoroSnapshot): string {
+  return renderCard('⛔ 不能在手机端关闭反茄钟', [
+    '关闭：请回到电脑端执行 fqoff',
+    ...statusLines(snapshot),
+  ])
+}
+
+export function formatAntiPomodoroRestCommandBlocked(snapshot: AntiPomodoroSnapshot): string {
+  return renderCard('⛔ 现在是休息时间', [
+    '限制：当前不接受这个命令',
+    `继续：请等 ${formatDuration(snapshot.remainingMs)} 后进入下一个工作窗口`,
+    '查看：发送 /fqs 可查看当前状态',
+  ])
+}
+
+export function formatAntiPomodoroRestFileBlocked(snapshot: AntiPomodoroSnapshot): string {
+  return renderCard('⛔ 现在是休息时间', [
+    '限制：当前不接受文件或图片',
+    `继续：请等 ${formatDuration(snapshot.remainingMs)} 后进入下一个工作窗口`,
+    '查看：发送 /fqs 可查看当前状态',
+  ])
 }
 
 function buildEnableMessage(snapshot: AntiPomodoroSnapshot, changed: boolean): string {
-  const title = changed ? '✅ 反茄钟已开启' : '反茄钟已在运行'
-  return [title, formatAntiPomodoroStatus(snapshot)].join('\n')
+  const title = changed ? '✅ 已开启反茄钟' : 'ℹ️ 反茄钟已在运行'
+  return renderCard(title, statusLines(snapshot))
 }
 
-function buildDisableMessage(snapshot: AntiPomodoroSnapshot, reason?: string): string {
-  const lines = ['✅ 反茄钟已关闭']
-  if (reason) lines.push(reason)
-  lines.push('当前为正常收发状态')
-  lines.push('需要时可在电脑端或手机端重新执行 fqon / /fqon')
-  return lines.join('\n')
+function buildDisableMessage(reason?: string): string {
+  const lines = ['状态：已关闭', '当前：恢复正常收发', '开启：电脑端 fqon 或手机端 /fqon']
+  if (reason) lines.splice(1, 0, `原因：${reason}`)
+  return renderCard('✅ 已关闭反茄钟', lines)
 }
 
 export function getAntiPomodoroSnapshot(now: number = Date.now()): AntiPomodoroSnapshot {
@@ -283,10 +313,11 @@ export function disableAntiPomodoro(reason?: string, now: number = Date.now()): 
     const snapshot = toSnapshot(state, now)
     return {
       changed: false,
-      message: [
-        '反茄钟当前未开启',
-        formatAntiPomodoroStatus(snapshot),
-      ].join('\n'),
+      message: renderCard('反茄钟', [
+        '状态：未开启',
+        '当前：正常收发',
+        '开启：电脑端 fqon 或手机端 /fqon',
+      ]),
       snapshot,
     }
   }
@@ -296,7 +327,7 @@ export function disableAntiPomodoro(reason?: string, now: number = Date.now()): 
   const snapshot = toSnapshot(disabled, now)
   return {
     changed: true,
-    message: buildDisableMessage(snapshot, reason),
+    message: buildDisableMessage(reason),
     snapshot,
   }
 }
@@ -318,22 +349,22 @@ export function claimRestQuota(now: number = Date.now()): RestQuotaDecision {
     writeState(current)
     return {
       allowed: true,
-      notice: [
-        '⏳ 现在是休息时间。',
-        '这 1 条后台指令已发给电脑继续处理，但结果会等到下一个工作窗口再送达。',
-        `本轮休息期的唯一后台指令额度已经用完，请等 ${formatDuration(snapshot.remainingMs)} 后再继续。`,
-      ].join('\n'),
+      notice: renderCard('⏳ 已使用本轮休息期后台指令', [
+        '处理：这 1 条消息已发给电脑继续工作',
+        '送达：结果会在下一个工作窗口再发回手机',
+        `额度：本轮休息期已用完，请等 ${formatDuration(snapshot.remainingMs)} 后再继续`,
+      ]),
       snapshot: toSnapshot(current, now),
     }
   }
 
   return {
     allowed: false,
-    rejection: [
-      '⛔ 现在是休息时间，本轮休息期的唯一后台指令额度已经用完。',
-      '这条消息不会发给电脑，也不会缓存。',
-      `请等 ${formatDuration(snapshot.remainingMs)} 后进入下一个工作窗口。`,
-    ].join('\n'),
+    rejection: renderCard('⛔ 现在是休息时间', [
+      '限制：本轮休息期的 1 条后台指令额度已用完',
+      '处理：这条消息不会发给电脑，也不会缓存',
+      `继续：请等 ${formatDuration(snapshot.remainingMs)} 后进入下一个工作窗口`,
+    ]),
     snapshot,
   }
 }
