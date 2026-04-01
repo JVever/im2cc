@@ -721,12 +721,12 @@ async function cmdConnect(): Promise<void> {
   }
 
   // 断开前同步：检查 session 是否漂移（Plan 模式等）
-  if (tool === 'claude') {
+  if (tool === 'claude' || tool === 'codex') {
     const allNames = listRegistered()
-    const synced = syncDriftedSession(session.name, session.sessionId, session.cwd, allNames)
+    const synced = syncDriftedSession(session.name, session.sessionId, session.cwd, allNames, tool as ToolId)
     if (synced) {
       console.log(`🔄 检测到 session 漂移，已自动同步: ${session.sessionId.slice(0, 8)} → ${synced.slice(0, 8)}`)
-      registerWithMeta(session.name, synced, session.cwd, 'claude', { claudeProfile: session.claudeProfile })
+      registerWithMeta(session.name, synced, session.cwd, tool as ToolId, { claudeProfile: session.claudeProfile })
       session = { ...session, sessionId: synced }
     }
   }

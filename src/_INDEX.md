@@ -5,7 +5,7 @@
 im2cc 核心业务逻辑：IM 消息接收 → 命令路由 → 本地 AI coding tool CLI 调用 → 输出格式化 → IM 回复
 
 ## 文件清单
-- index.ts：主入口，初始化各模块、启动飞书连接、消息路由、崩溃恢复
+- index.ts：主入口，初始化各模块、启动飞书连接、消息路由、崩溃恢复，并判定 /fc 是否允许发送最近一轮 recap
 - daemon-process.ts：守护进程进程识别与 PID/锁元数据校验，供 CLI 和 daemon 共享
 - config.ts：配置加载 (~/.im2cc/config.json, ~/.im2cc/wechat-account.json)
 - support-policy.ts：正式支持 / best-effort 支持矩阵常量与公共文案
@@ -25,7 +25,7 @@ im2cc 核心业务逻辑：IM 消息接收 → 命令路由 → 本地 AI coding
 - status.ts：会话状态面板构建（/fs 和 /fc 共用），含 context token、git 分支、Anthropic 配额
 - output.ts：stream-json 事件 → 飞书消息文本格式化
 - registry.ts：命名 session 注册表（register/lookup/list/remove，永久寻址）
-- discover.ts：扫描本地 Claude Code 对话（session 发现、slug→路径反推，作为注册表的补充）
+- discover.ts：扫描本地 Claude Code 对话，并处理 Claude/Codex 的 session 漂移同步（Codex 会尝试匹配 tmux pane 可见内容到真实 thread）
 - recap.ts：上下文回顾（过滤 init 消息、格式化最近一轮对话、/fc 时按最多 3 条消息发送）
 - feishu.ts：飞书 REST 轮询适配器（定时拉取群消息、发消息、资源下载）
 - wechat.ts：微信 ClawBot iLink 适配器（文本长轮询、发送、绑定）

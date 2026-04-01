@@ -1,5 +1,5 @@
 /**
- * @input:    ~/.claude/projects/ 下的 session JSONL 文件
+ * @input:    ~/.claude/projects/ 下的 session JSONL 文件, ~/.codex/sessions/ 下的 rollout JSONL 文件, tmux 活跃 pane 文本
  * @output:   discoverSessions(), pathToSlug(), syncDriftedSession() — 扫描本地对话 + 路径转 slug + 断开前漂移同步
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
@@ -8,7 +8,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import readline from 'node:readline'
+import { execFileSync } from 'node:child_process'
 import { log } from './logger.js'
+import type { ToolId } from './tool-driver.js'
 
 export interface DiscoveredSession {
   sessionId: string
@@ -234,7 +236,12 @@ export function syncDriftedSession(
   registeredSessionId: string,
   cwd: string,
   activeNames: { name: string; sessionId: string; cwd: string; tool?: string }[],
+  tool: ToolId = 'claude',
 ): string | null {
+  if (tool === 'codex') {
+    return syncDriftedCodexSession(name, registeredSessionId, cwd, activeNames)
+  }
+
   const slug = pathToSlug(cwd)
   const slugDir = path.join(os.homedir(), '.claude', 'projects', slug)
 
@@ -296,4 +303,218 @@ function checkSessionTitle(filePath: string, name: string): boolean {
     const target = `im2cc:${name}`
     return head.includes(`"customTitle":"${target}"`) || head.includes(`"agentName":"${target}"`)
   } catch { return false }
+}
+
+interface CodexSessionCandidate {
+  sessionId: string
+  filePath: string
+  mtimeMs: number
+}
+
+function syncDriftedCodexSession(
+  name: string,
+  registeredSessionId: string,
+  cwd: string,
+  activeNames: { name: string; sessionId: string; cwd: string; tool?: string }[],
+): string | null {
+  const tmuxMatch = detectCodexThreadFromTmuxPane(name, cwd)
+  if (tmuxMatch && tmuxMatch !== registeredSessionId) {
+    log(`[sync-drift] codex pane match: ${name} ${registeredSessionId.slice(0, 8)} → ${tmuxMatch.slice(0, 8)}`)
+    return tmuxMatch
+  }
+
+  const sameProjectCodexNames = activeNames.filter(
+    n => n.cwd === cwd && (n.tool ?? 'claude') === 'codex',
+  )
+  if (sameProjectCodexNames.length !== 1) {
+    log(`[sync-drift] codex ambiguous: ${name} has ${sameProjectCodexNames.length} codex names in same project, skipping fallback auto-sync`)
+    return null
+  }
+
+  const newest = findMostRecentCodexSessionByCwd(cwd)
+  if (!newest || newest === registeredSessionId) return null
+
+  log(`[sync-drift] codex single-name match: ${name} ${registeredSessionId.slice(0, 8)} → ${newest.slice(0, 8)}`)
+  return newest
+}
+
+function detectCodexThreadFromTmuxPane(name: string, cwd: string): string | null {
+  const tmuxSession = `im2cc-codex-${name}`
+  try {
+    execFileSync('tmux', ['has-session', '-t', tmuxSession], { stdio: 'ignore' })
+  } catch {
+    return null
+  }
+
+  let paneText = ''
+  try {
+    paneText = execFileSync(
+      'tmux',
+      ['capture-pane', '-p', '-t', tmuxSession, '-S', '-200'],
+      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] },
+    ).trim()
+  } catch {
+    return null
+  }
+
+  if (normalizeText(paneText).length < 24) return null
+  return findBestMatchingCodexThread(cwd, paneText)
+}
+
+function findBestMatchingCodexThread(cwd: string, paneText: string): string | null {
+  const candidates = listRecentCodexCandidates(cwd, 15)
+  if (candidates.length === 0) return null
+
+  const scored = candidates
+    .map(candidate => {
+      const texts = extractRecentCodexTexts(candidate.filePath)
+      const score = scorePaneAgainstCodexTexts(paneText, texts)
+      return { candidate, score }
+    })
+    .filter(item => item.score > 0)
+    .sort((a, b) => b.score - a.score || b.candidate.mtimeMs - a.candidate.mtimeMs)
+
+  if (scored.length === 0) return null
+
+  const best = scored[0]
+  const second = scored[1]?.score ?? -1
+  if (best.score < 120) return null
+  if (second >= 0 && best.score - second < 40) return null
+  return best.candidate.sessionId
+}
+
+function listRecentCodexCandidates(cwd: string, limit: number): CodexSessionCandidate[] {
+  const sessionsDir = path.join(os.homedir(), '.codex', 'sessions')
+  if (!fs.existsSync(sessionsDir)) return []
+
+  const resolvedCwd = path.resolve(cwd)
+  const candidates: CodexSessionCandidate[] = []
+
+  const walk = (dir: string): void => {
+    let entries: fs.Dirent[]
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        walk(full)
+        continue
+      }
+      if (!entry.name.endsWith('.jsonl')) continue
+      try {
+        const firstLine = fs.readFileSync(full, 'utf-8').split('\n')[0]
+        const meta = JSON.parse(firstLine) as Record<string, unknown>
+        if (meta.type !== 'session_meta') continue
+        const payload = meta.payload as Record<string, unknown> | undefined
+        if (payload?.cwd !== resolvedCwd) continue
+        candidates.push({
+          sessionId: String(payload.id ?? entry.name.replace('.jsonl', '')),
+          filePath: full,
+          mtimeMs: fs.statSync(full).mtimeMs,
+        })
+      } catch {
+        continue
+      }
+    }
+  }
+
+  walk(sessionsDir)
+  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs)
+  return candidates.slice(0, limit)
+}
+
+function findMostRecentCodexSessionByCwd(cwd: string): string | null {
+  return listRecentCodexCandidates(cwd, 1)[0]?.sessionId ?? null
+}
+
+function extractRecentCodexTexts(filePath: string): string[] {
+  const lines: string[] = []
+  try {
+    const content = fs.readFileSync(filePath, 'utf-8').split('\n')
+    for (const line of content) {
+      if (line.trim()) lines.push(line)
+    }
+  } catch {
+    return []
+  }
+
+  const texts: string[] = []
+  for (const line of lines.slice(-160)) {
+    let item: Record<string, unknown>
+    try {
+      item = JSON.parse(line)
+    } catch {
+      continue
+    }
+
+    const payload = item.payload as Record<string, unknown> | undefined
+    if (item.type === 'event_msg' && payload?.type === 'user_message' && typeof payload.message === 'string') {
+      texts.push(payload.message)
+      continue
+    }
+
+    if (item.type !== 'response_item' || !payload) continue
+    if (payload.type === 'message' && payload.role === 'assistant' && Array.isArray(payload.content)) {
+      for (const contentBlock of payload.content as Array<Record<string, unknown>>) {
+        const text = typeof contentBlock.text === 'string'
+          ? contentBlock.text
+          : typeof contentBlock.content === 'string'
+            ? contentBlock.content
+            : ''
+        if (text) texts.push(text)
+      }
+    }
+  }
+
+  return texts.slice(-8)
+}
+
+function scorePaneAgainstCodexTexts(paneText: string, texts: string[]): number {
+  const normalizedPane = normalizeText(paneText)
+  const seen = new Set<string>()
+  let score = 0
+
+  for (const text of texts) {
+    for (const segment of splitSegments(text)) {
+      if (seen.has(segment)) continue
+      seen.add(segment)
+
+      if (normalizedPane.includes(segment)) {
+        score += 120 + Math.min(segment.length, 60)
+        continue
+      }
+
+      const width = segment.length >= 24 ? 12 : 8
+      let hits = 0
+      for (let i = 0; i <= segment.length - width; i += width) {
+        const gram = segment.slice(i, i + width)
+        if (gram && normalizedPane.includes(gram)) hits++
+      }
+      if (hits > 0) score += hits * 18
+    }
+  }
+
+  return score
+}
+
+function splitSegments(text: string): string[] {
+  const normalized = normalizeText(text)
+  if (normalized.length < 12) return []
+
+  const segments = normalized
+    .split(/[。！？\n\r]+|(?<=[.!?])\s+/)
+    .map(part => part.trim())
+    .filter(part => part.length >= 12)
+    .map(part => part.slice(0, 80))
+
+  if (segments.length === 0) return [normalized.slice(0, 80)]
+  return segments.slice(0, 8)
+}
+
+function normalizeText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim()
 }

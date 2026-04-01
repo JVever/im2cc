@@ -289,12 +289,12 @@ async function connectToRegistered(
   reg = { ...reg, cwd: pathCheck.resolvedPath }
 
   // 断开前同步：在 killLocalSession 之前检查 session 是否漂移
-  if (tool === 'claude') {
+  if (tool === 'claude' || tool === 'codex') {
     const allNames = listRegistered()
-    const synced = syncDriftedSession(reg.name, reg.sessionId, reg.cwd, allNames)
+    const synced = syncDriftedSession(reg.name, reg.sessionId, reg.cwd, allNames, tool)
     if (synced) {
       log(`[${conversationId}] pre-disconnect sync: ${reg.name} ${reg.sessionId.slice(0, 8)} → ${synced.slice(0, 8)}`)
-      register(reg.name, synced, reg.cwd, 'claude')
+      register(reg.name, synced, reg.cwd, tool)
       reg = { ...reg, sessionId: synced }
     }
   }
