@@ -1,6 +1,6 @@
 /**
  * @input:    Im2ccConfig, Transport adapters, AI coding tool CLIs, recap, file-staging
- * @output:   startDaemon() — 主入口：初始化各模块、守护进程单实例锁、启动 transport 轮询、消息路由、/fc 上下文回顾、文件暂存与合并、反茄钟闸门
+ * @output:   startDaemon(), shouldSendFcRecap() — 主入口：初始化各模块、守护进程单实例锁、启动 transport 轮询、消息路由、/fc 上下文回顾、文件暂存与合并、反茄钟闸门
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process'
 import { loadConfig, getPidFile, getDaemonLockDir, loadWeChatAccount } from './config.js'
 import { isUserAllowed } from './security.js'
 import { isDuplicate, listActiveBindings, getBinding, archiveBinding } from './session.js'
-import { parseCommand, handleCommand } from './commands.js'
+import { parseCommand, handleCommand, type ParsedCommand } from './commands.js'
 import { enqueue, recoverOnStartup } from './queue.js'
 import { FeishuAdapter } from './feishu.js'
 // 导入所有 tool driver（每个文件末尾自动注册到全局 driver 注册表）
@@ -46,6 +46,19 @@ import {
 } from './daemon-process.js'
 
 const DAEMON_ENTRY = daemonMainModulePath()
+
+export function shouldSendFcRecap(
+  cmd: ParsedCommand,
+  hadBindingBefore: boolean,
+  hasBindingAfter: boolean,
+  recapBudget: number,
+): boolean {
+  return cmd.command === 'fc'
+    && Boolean(cmd.args)
+    && recapBudget > 0
+    && !hadBindingBefore
+    && hasBindingAfter
+}
 
 /**
  * 检查某个 session 是否正在被本地 tmux 使用。
@@ -332,9 +345,10 @@ export async function startDaemon(): Promise<void> {
       react(cmdEmoji[cmd.command] ?? 'OK')
 
       try {
+        const hadBindingBefore = Boolean(getBinding(conversationId))
         const reply = await handleCommand(cmd, conversationId, config, transport)
-        if (cmd.command === 'fc' && cmd.args && config.recapBudget > 0) {
-          const binding = getBinding(conversationId)
+        const binding = getBinding(conversationId)
+        if (shouldSendFcRecap(cmd, hadBindingBefore, Boolean(binding), config.recapBudget)) {
           if (binding) {
             try {
               const driver = getDriver(binding.tool ?? 'claude')

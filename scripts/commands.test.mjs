@@ -150,6 +150,21 @@ test('/fl groups sessions by tool, sorts names, and keeps cwd basename', async (
   assert.ok(alphaIndex > claudeIndex && betaIndex > alphaIndex, 'Claude sessions should sort by name')
 })
 
+test('/fc on an already bound chat explains the current session and switch steps', async () => {
+  resetState()
+  const config = configForTests()
+  configMod.saveConfig(config)
+  registerSession('alpha', 'portal', 'codex', 'conv-switch')
+
+  const fcCmd = commands.parseCommand('/fc spark')
+  assert.ok(fcCmd)
+  const output = await commands.handleCommand(fcCmd, 'conv-switch', config)
+
+  assert.match(output, /当前聊天已连接到 Codex 对话「alpha」 \(portal\)。/)
+  assert.match(output, /如需切换到「spark」，请先发送 \/fd 断开当前连接，再发送 \/fc spark。/)
+  assert.doesNotMatch(output, /最近一轮对话/)
+})
+
 test('first-run guidance prefers computer-side creation and IM /fn requires explicit project', async () => {
   resetState()
   const config = configForTests()
