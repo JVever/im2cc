@@ -8,11 +8,11 @@ import path from 'node:path'
 import type { Im2ccConfig } from './config.js'
 import type { TransportType } from './transport.js'
 import { validatePath, resolvePath, listProjects, isValidSessionName } from './security.js'
-import { createBinding, getBinding, archiveBinding, archiveBindingsBySession, updateBinding } from './session.js'
+import { createBinding, getBinding, archiveBinding, archiveBindingsBySession, updateBinding, type Binding } from './session.js'
 import { getDriver, hasDriver, type ToolId } from './tool-driver.js'
 import { handleStop, getQueueStatus } from './queue.js'
 import { discoverSessions, findSession, syncDriftedSession } from './discover.js'
-import { register, lookup, search, listRegistered, touch, remove, updateRegistry } from './registry.js'
+import { register, lookup, lookupBySessionId, search, listRegistered, touch, remove, updateRegistry } from './registry.js'
 import { buildSessionStatus } from './status.js'
 import { log } from './logger.js'
 import { isBestEffortTool, supportedToolChoices, supportedToolList } from './support-policy.js'
@@ -170,10 +170,29 @@ async function handleFn(args: string, conversationId: string, config: Im2ccConfi
   }
 }
 
+function describeBoundSession(binding: Binding): string {
+  const registered = lookupBySessionId(binding.sessionId)
+  const tool = toolDisplayName(registered?.tool ?? binding.tool ?? 'claude')
+  const project = path.basename(binding.cwd)
+  const sessionLabel = registered?.name ? `「${registered.name}」` : `session ${binding.sessionId.slice(0, 8)}`
+  return `${tool} 对话${sessionLabel}${project ? ` (${project})` : ''}`
+}
+
+function formatFcAlreadyConnectedMessage(existing: Binding, requestedTarget: string): string {
+  const current = describeBoundSession(existing)
+  const retryCommand = requestedTarget ? `/fc ${requestedTarget}` : '/fc <名称>'
+  const requestedLabel = requestedTarget ? `「${requestedTarget}」` : '新的对话'
+  return [
+    `当前聊天已连接到 ${current}。`,
+    `如需切换到${requestedLabel}，请先发送 /fd 断开当前连接，再发送 ${retryCommand}。`,
+  ].join('\n')
+}
+
 async function handleFc(args: string, conversationId: string, config: Im2ccConfig, transport: TransportType = 'feishu'): Promise<string> {
   const existing = getBinding(conversationId)
   if (existing) {
-    return `该群已连接，先 /fd 再 /fc`
+    const requestedTarget = args ? args.split(/\s+/)[0] ?? '' : ''
+    return formatFcAlreadyConnectedMessage(existing, requestedTarget)
   }
 
   const parts = args ? args.split(/\s+/) : []
