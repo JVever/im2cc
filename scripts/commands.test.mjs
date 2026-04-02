@@ -150,6 +150,49 @@ test('/fl groups sessions by tool, sorts names, and keeps cwd basename', async (
   assert.ok(alphaIndex > claudeIndex && betaIndex > alphaIndex, 'Claude sessions should sort by name')
 })
 
+test('local registered session list renders concise placement labels only', () => {
+  resetState()
+
+  const registered = [
+    {
+      name: 'rew',
+      sessionId: 'rew-session',
+      cwd: path.join(testHome, 'Code', 'remote-work'),
+      tool: 'claude',
+    },
+    {
+      name: 'spark',
+      sessionId: 'spark-session',
+      cwd: path.join(testHome, 'Code', 'spark-chat'),
+      tool: 'codex',
+    },
+    {
+      name: 'myskill',
+      sessionId: 'myskill-session',
+      cwd: path.join(testHome, 'Code', 'writing-style'),
+      tool: 'codex',
+    },
+  ]
+
+  const output = commands.renderLocalRegisteredSessionList(registered, {
+    activeBindings: [
+      { sessionId: 'rew-session', transport: 'feishu' },
+      { sessionId: 'myskill-session', transport: 'wechat' },
+    ],
+    hasLocalWindow: (sessionInfo) => sessionInfo.name === 'spark' || sessionInfo.name === 'rew',
+  })
+
+  assert.match(output, /^已注册的对话 \(3\)/)
+  assert.match(output, /── Claude ──/)
+  assert.match(output, /── Codex ──/)
+  assert.match(output, /rew\s+\(remote-work\s*\)\s+飞书 电脑/)
+  assert.match(output, /myskill\s+\(writing-style\s*\)\s+微信/)
+  assert.match(output, /spark\s+\(spark-chat\s*\)\s+电脑/)
+  assert.doesNotMatch(output, /本地状态/)
+  assert.doesNotMatch(output, /活跃|休眠/)
+  assert.doesNotMatch(output, /\[[0-9a-f]{8}\]/)
+})
+
 test('/fc on an already bound chat explains the current session and switch steps', async () => {
   resetState()
   const config = configForTests()

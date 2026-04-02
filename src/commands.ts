@@ -1,6 +1,6 @@
 /**
  * @input:    用户消息文本, Im2ccConfig, Binding
- * @output:   parseCommand(), handleCommand() — 命令解析与执行（含 /fc 双参数注册模式、/fqon /fqoff /fqs）
+ * @output:   parseCommand(), handleCommand(), renderRegisteredSessionList(), renderLocalRegisteredSessionList() — 命令解析与执行、IM/本地列表渲染（含 /fc 双参数注册模式、/fqon /fqoff /fqs）
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -487,6 +487,19 @@ function toolDisplayOrder(tool: string): number {
   }
 }
 
+function displayWidth(text: string): number {
+  let width = 0
+  for (const char of text) {
+    width += /[^\u0000-\u00ff]/.test(char) ? 2 : 1
+  }
+  return width
+}
+
+function padDisplay(text: string, targetWidth: number): string {
+  const padding = Math.max(0, targetWidth - displayWidth(text))
+  return text + ' '.repeat(padding)
+}
+
 export function renderRegisteredSessionList(registered: RegisteredSession[]): string {
   // 按工具分组，组内按字母序，并保留项目 basename 方便在手机端区分
   const byTool = new Map<string, Array<{ name: string, cwdBase: string }>>()
@@ -509,6 +522,87 @@ export function renderRegisteredSessionList(registered: RegisteredSession[]): st
     sections.push(`── ${toolDisplayName(tool)} ──\n${sessions.map(s => `  ${s.name} (${s.cwdBase})`).join('\n')}`)
   }
   return `📋 已注册的对话 (${registered.length}):\n${sections.join('\n')}`
+}
+
+interface RenderLocalRegisteredSessionListOptions {
+  activeBindings?: Binding[]
+  hasLocalWindow?: (session: RegisteredSession) => boolean
+}
+
+function transportStatusLabel(transport: string | undefined): string | null {
+  switch (transport) {
+    case 'feishu':
+      return '飞书'
+    case 'wechat':
+      return '微信'
+    default:
+      return null
+  }
+}
+
+export function renderLocalRegisteredSessionList(
+  registered: RegisteredSession[],
+  options: RenderLocalRegisteredSessionListOptions = {},
+): string {
+  const activeBindings = options.activeBindings ?? []
+  const hasLocalWindow = options.hasLocalWindow ?? (() => false)
+  const bindingsBySessionId = new Map<string, Binding[]>()
+
+  for (const binding of activeBindings) {
+    const list = bindingsBySessionId.get(binding.sessionId) ?? []
+    list.push(binding)
+    bindingsBySessionId.set(binding.sessionId, list)
+  }
+
+  const byTool = new Map<string, Array<{ name: string, cwdBase: string, status: string }>>()
+  let nameWidth = 0
+  let projectLabelWidth = 0
+
+  for (const session of registered) {
+    const tool = session.tool || 'claude'
+    const cwdBase = path.basename(session.cwd)
+    const labels: string[] = []
+    const seenLabels = new Set<string>()
+    const pushLabel = (label: string | null) => {
+      if (!label || seenLabels.has(label)) return
+      seenLabels.add(label)
+      labels.push(label)
+    }
+
+    for (const binding of bindingsBySessionId.get(session.sessionId) ?? []) {
+      pushLabel(transportStatusLabel(binding.transport))
+    }
+    if (hasLocalWindow(session)) pushLabel('电脑')
+
+    nameWidth = Math.max(nameWidth, displayWidth(session.name))
+    projectLabelWidth = Math.max(projectLabelWidth, displayWidth(`(${cwdBase})`))
+
+    const rows = byTool.get(tool) ?? []
+    rows.push({ name: session.name, cwdBase, status: labels.join(' ') })
+    byTool.set(tool, rows)
+  }
+
+  for (const rows of byTool.values()) {
+    rows.sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  const sections: string[] = []
+  const orderedTools = [...byTool.keys()].sort((a, b) => {
+    const orderDelta = toolDisplayOrder(a) - toolDisplayOrder(b)
+    return orderDelta !== 0 ? orderDelta : a.localeCompare(b)
+  })
+
+  for (const tool of orderedTools) {
+    const rows = byTool.get(tool) ?? []
+    const lines = rows.map(row => {
+      const projectLabel = `(${row.cwdBase})`
+      const base = `  ${padDisplay(row.name, nameWidth)}  ${padDisplay(projectLabel, projectLabelWidth)}`
+      return row.status ? `${base}  ${row.status}` : base.trimEnd()
+    })
+    sections.push(`── ${toolDisplayName(tool)} ──\n${lines.join('\n')}`)
+  }
+
+  return `已注册的对话 (${registered.length})\n\n${sections.join('\n')}`
 }
 
 function handleFl(): string {

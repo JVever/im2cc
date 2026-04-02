@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * @input:    CLI 参数 (start/stop/status/logs/sessions/new/connect/list/delete/detach/show/setup/secure/onboard/install-service/doctor/help/upgrade/wechat/fqon/fqoff/fqs)
- * @output:   守护进程管理 + 完整 session 管理命令（new/connect/list/delete/detach/show）
+ * @output:   守护进程管理 + 完整 session 管理命令（new/connect/list/delete/detach/show；list 输出按对话位置聚合）
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -19,7 +19,7 @@ import { resumeCommand, toolCreateArgs, toolResumeArgs } from '../src/tool-cli-a
 import { findSession, syncDriftedSession } from '../src/discover.js'
 import { DAEMON_LOCK_STARTUP_GRACE_MS, DAEMON_MARKER, daemonMainModulePath, isIm2ccDaemonProcess, killAllDaemonProcesses, listDaemonProcessPids, readDaemonPidRecord } from '../src/daemon-process.js'
 import { claudeSupportsSessionNameFlag } from '../src/tool-compat.js'
-import { renderRegisteredSessionList, renderUnifiedHelp } from '../src/commands.js'
+import { renderLocalRegisteredSessionList, renderRegisteredSessionList, renderUnifiedHelp } from '../src/commands.js'
 import { detectInstallRoot, listReplaceableInstallEntries, PUBLIC_ARCHIVE_URL } from '../src/upgrade.js'
 import { hasCustomClaudeLauncher, selectClaudeProfile } from '../src/claude-launcher.js'
 import { disableAntiPomodoro, enableAntiPomodoro, formatAntiPomodoroStatus, getAntiPomodoroSnapshot } from '../src/anti-pomodoro.js'
@@ -853,7 +853,7 @@ async function cmdConnectDoubleArg(newName: string, query: string): Promise<void
   }
 }
 
-/** im2cc list — 列出所有已注册对话（含 tmux 状态和工具标签） */
+/** im2cc list — 列出所有已注册对话（按飞书/微信/电脑位置聚合） */
 function cmdList(): void {
   const all = listRegistered()
   if (all.length === 0) {
@@ -861,14 +861,10 @@ function cmdList(): void {
     return
   }
 
-  console.log(renderRegisteredSessionList(all))
-  console.log('')
-  console.log('本地状态:')
-  for (const s of all) {
-    const tmux = findTmuxSession(s.name, s.tool)
-    const status = tmux ? '🟢 活跃' : '⬤ 休眠'
-    console.log(`  ${status}  ${s.name} [${s.sessionId.slice(0, 8)}]`)
-  }
+  console.log(renderLocalRegisteredSessionList(all, {
+    activeBindings: listActiveBindings(),
+    hasLocalWindow: (session) => Boolean(findTmuxSession(session.name, session.tool)),
+  }))
 }
 
 /** im2cc delete <名称> — 终止 tmux session 并从注册表删除 */
