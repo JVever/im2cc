@@ -16,7 +16,7 @@ im2cc 核心业务逻辑：IM 消息接收 → 命令路由 → 本地 AI coding
 - tool-compat.ts：工具 CLI 可选能力探测（例如 Claude 是否支持 `--name`）
 - upgrade.ts：升级辅助逻辑（定位安装根目录、公开源码包升级辅助）
 - session.ts：Session 绑定 CRUD、原子写、消息去重
-- anti-pomodoro.ts：反茄钟状态机（全局周期、休息期单次后台指令额度、延迟结果队列、daemon 同步）
+- anti-pomodoro.ts：反茄钟状态机（全局周期、休息期单次后台指令额度、延迟结果队列、daemon 同步与失败重试）
 - claude-driver.ts：Claude Code CLI 驱动（spawn、stream-json 解析、中断）
 - codex-driver.ts：Codex CLI 驱动（thread_id 创建、resume、输出解析）
 - gemini-driver.ts：Gemini CLI 驱动（best-effort，session_id 创建、resume、输出解析）

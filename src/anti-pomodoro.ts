@@ -6,10 +6,12 @@
 
 import fs from 'node:fs'
 import { getAntiPomodoroFile } from './config.js'
+import { error } from './logger.js'
 
 export const ANTI_POMODORO_WORK_MS = 5 * 60 * 1000
 export const ANTI_POMODORO_REST_MS = 30 * 60 * 1000
 export const ANTI_POMODORO_IM_COMMANDS = new Set(['fqon', 'fqoff', 'fqs'])
+const ANTI_POMODORO_RETRY_MS = 15 * 1000
 
 export type AntiPomodoroPhase = 'work' | 'rest'
 
@@ -406,6 +408,43 @@ export function drainDeliverableReplies(now: number = Date.now()): Array<{ conve
   return replies
 }
 
+function getNextDeliverableReply(now: number = Date.now()): DelayedReply | null {
+  const state = readState(now)
+  const reconciled = reconcileState(state, now)
+  const current = reconciled.state
+
+  if (reconciled.changed) writeState(current)
+  if (!current.enabled || current.phase !== 'work' || current.delayedReplies.length === 0) {
+    return null
+  }
+
+  return current.delayedReplies[0]
+}
+
+function isSameDelayedReply(left: DelayedReply, right: DelayedReply): boolean {
+  return left.conversationId === right.conversationId
+    && left.text === right.text
+    && left.queuedAt === right.queuedAt
+}
+
+function markDelayedReplyDelivered(reply: DelayedReply, now: number = Date.now()): boolean {
+  const state = readState(now)
+  const reconciled = reconcileState(state, now)
+  const current = reconciled.state
+  const index = current.delayedReplies.findIndex(item => isSameDelayedReply(item, reply))
+
+  if (index >= 0) {
+    current.delayedReplies.splice(index, 1)
+    current.updatedAt = nowIso(now)
+  }
+
+  if (reconciled.changed || index >= 0) {
+    writeState(current)
+  }
+
+  return index >= 0
+}
+
 export class AntiPomodoroDaemonController {
   private timer: NodeJS.Timeout | null = null
   private syncing = false
@@ -453,9 +492,19 @@ export class AntiPomodoroDaemonController {
         if (reconciled.changed) writeState(reconciled.state)
         this.schedule(reconciled.state, now)
 
-        const readyReplies = drainDeliverableReplies(now)
-        for (const item of readyReplies) {
-          await this.sendByConversationId(item.conversationId, item.text)
+        while (true) {
+          const item = getNextDeliverableReply(Date.now())
+          if (!item) break
+
+          try {
+            await this.sendByConversationId(item.conversationId, item.text)
+          } catch (err) {
+            error(`[anti-pomodoro] 延迟结果送达失败 [${item.conversationId}]: ${err instanceof Error ? err.message : String(err)}`)
+            this.schedule(reconciled.state, Date.now(), ANTI_POMODORO_RETRY_MS)
+            break
+          }
+
+          markDelayedReplyDelivered(item, Date.now())
         }
       } while (this.pendingSync)
     } finally {
@@ -463,15 +512,15 @@ export class AntiPomodoroDaemonController {
     }
   }
 
-  private schedule(state: AntiPomodoroState, now: number): void {
+  private schedule(state: AntiPomodoroState, now: number, overrideDelayMs?: number): void {
     if (this.timer) {
       clearTimeout(this.timer)
       this.timer = null
     }
 
-    if (!state.enabled) return
+    if (!state.enabled && overrideDelayMs == null) return
 
-    const delayMs = Math.max(250, phaseEndMs(state) - now + 50)
+    const delayMs = Math.max(250, overrideDelayMs ?? (phaseEndMs(state) - now + 50))
     this.timer = setTimeout(() => {
       void this.sync()
     }, delayMs)

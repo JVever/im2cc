@@ -15,6 +15,12 @@ function resetState() {
   fs.rmSync(path.join(testHome, '.im2cc'), { recursive: true, force: true })
 }
 
+function readPersistedState() {
+  return JSON.parse(
+    fs.readFileSync(path.join(testHome, '.im2cc', 'data', 'anti-pomodoro.json'), 'utf-8'),
+  )
+}
+
 test('anti-pomodoro rest quota is single-use and delayed replies flush on next work window', () => {
   resetState()
 
@@ -67,4 +73,37 @@ test('disable clears anti-pomodoro state back to normal', () => {
   const snapshot = antiPomodoro.getAntiPomodoroSnapshot(t0 + 3000)
   assert.equal(snapshot.enabled, false)
   assert.equal(snapshot.phase, null)
+})
+
+test('anti-pomodoro daemon sync keeps delayed replies on send failure and retries later', async () => {
+  resetState()
+
+  const t0 = Date.UTC(2026, 0, 1, 12, 0, 0)
+  antiPomodoro.enableAntiPomodoro(t0)
+
+  const restAt = t0 + antiPomodoro.ANTI_POMODORO_WORK_MS + 1000
+  antiPomodoro.queueDelayedReply('conv-a', 'done', restAt)
+
+  const nextWorkAt = restAt + antiPomodoro.ANTI_POMODORO_REST_MS + 1000
+  const realDateNow = Date.now
+  let attempts = 0
+  const controller = new antiPomodoro.AntiPomodoroDaemonController(async () => {
+    attempts += 1
+    if (attempts === 1) throw new Error('network down')
+  })
+
+  Date.now = () => nextWorkAt
+
+  try {
+    await controller.sync()
+    assert.equal(attempts, 1)
+    assert.equal(readPersistedState().delayedReplies.length, 1)
+
+    await controller.sync()
+    assert.equal(attempts, 2)
+    assert.equal(readPersistedState().delayedReplies.length, 0)
+  } finally {
+    Date.now = realDateNow
+    controller.stop()
+  }
 })
