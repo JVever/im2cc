@@ -64,6 +64,20 @@ test('queue drops streamed and final replies after remote binding is archived', 
   assert.deepEqual(sent, [])
 })
 
+test('queue records a recent completed snapshot for desktop handoff recall', { concurrency: false }, async () => {
+  resetState()
+
+  session.createBinding('conv-handoff-finished', 'session-finished', '/tmp', 'YOLO', 'test-cli', 'feishu', 'claude')
+
+  queue.enqueue('conv-handoff-finished', 'finish this task', async () => {}, 30)
+  await wait(120)
+
+  const completed = queue.listCompletedInflightSnapshotsForSession('session-finished', 'conv-handoff-finished')
+  assert.equal(completed.length, 1)
+  assert.equal(completed[0].status, 'completed')
+  assert.match(completed[0].outputPreview, /stream reply|final reply/)
+})
+
 test('recoverOnStartup drops inflight results for detached conversations', { concurrency: false }, async () => {
   resetState()
 
@@ -133,4 +147,39 @@ test('interruptInflightTasksForSession stops detached child processes by session
     alive = false
   }
   assert.equal(alive, false)
+})
+
+test('listCompletedInflightSnapshotsForSession prunes expired snapshots', { concurrency: false }, async () => {
+  resetState()
+
+  const inflightDir = path.join(testHome, '.im2cc', 'data', 'inflight')
+  fs.mkdirSync(inflightDir, { recursive: true })
+
+  const staleSnapshot = {
+    id: 'job-stale',
+    conversationId: 'conv-stale',
+    sessionId: 'session-prune',
+    text: 'old task',
+    startedAt: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
+    finishedAt: new Date(Date.now() - 11 * 60 * 1000).toISOString(),
+    status: 'completed',
+    outputPreview: 'old output',
+  }
+  const freshSnapshot = {
+    id: 'job-fresh',
+    conversationId: 'conv-fresh',
+    sessionId: 'session-prune',
+    text: 'fresh task',
+    startedAt: new Date(Date.now() - 60 * 1000).toISOString(),
+    finishedAt: new Date(Date.now() - 30 * 1000).toISOString(),
+    status: 'completed',
+    outputPreview: 'fresh output',
+  }
+
+  fs.writeFileSync(path.join(inflightDir, 'job-stale.completed.json'), JSON.stringify(staleSnapshot))
+  fs.writeFileSync(path.join(inflightDir, 'job-fresh.completed.json'), JSON.stringify(freshSnapshot))
+
+  const completed = queue.listCompletedInflightSnapshotsForSession('session-prune')
+  assert.deepEqual(completed.map(item => item.id), ['job-fresh'])
+  assert.equal(fs.existsSync(path.join(inflightDir, 'job-stale.completed.json')), false)
 })

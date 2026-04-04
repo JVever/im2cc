@@ -1,6 +1,6 @@
 /**
  * @input:    用户消息, Claude 驱动, Session 绑定
- * @output:   enqueue(), handleStop(), getQueueStatus(), recoverOnStartup() — 消息队列、Job 管理、持久化恢复
+ * @output:   enqueue(), handleStop(), getQueueStatus(), recoverOnStartup(), listInflightTasksForSession() — 消息队列、Job 管理、持久化恢复、桌面接回保护态快照
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -79,6 +79,34 @@ interface InflightMeta {
   outputFile: string
 }
 
+export interface InflightTaskSnapshot {
+  id: string
+  conversationId: string
+  sessionId: string
+  text: string
+  pid: number | null
+  startedAt: string
+  outputPath: string
+  outputText: string
+  running: boolean
+}
+
+export type CompletedInflightStatus = 'completed' | 'failed' | 'interrupted'
+
+export interface CompletedInflightSnapshot {
+  id: string
+  conversationId: string
+  sessionId: string
+  text: string
+  startedAt: string
+  finishedAt: string
+  status: CompletedInflightStatus
+  outputPreview: string
+}
+
+const COMPLETED_SUFFIX = '.completed.json'
+const COMPLETED_TTL_MS = 10 * 60 * 1000
+
 function createInflight(conversationId: string, sessionId: string, text: string): InflightMeta {
   const id = crypto.randomUUID()
   const dir = getInflightDir()
@@ -108,6 +136,70 @@ function cleanupInflight(id: string): void {
   try { fs.unlinkSync(path.join(dir, `${id}.output`)) } catch {}
 }
 
+function readOutputText(filePath: string): string {
+  try {
+    return fs.readFileSync(filePath, 'utf-8').trim()
+  } catch {
+    return ''
+  }
+}
+
+function trimOutputPreview(text: string): string {
+  const normalized = text.trim()
+  if (!normalized) return ''
+  const lines = normalized.split('\n')
+  const tail = lines.slice(-20).join('\n').trim()
+  return tail.length > 4000 ? tail.slice(-4000).trim() : tail
+}
+
+function completedSnapshotPath(id: string): string {
+  return path.join(getInflightDir(), `${id}${COMPLETED_SUFFIX}`)
+}
+
+function pruneCompletedSnapshots(dir: string = getInflightDir()): void {
+  const cutoff = Date.now() - COMPLETED_TTL_MS
+  for (const entry of fs.readdirSync(dir)) {
+    if (!entry.endsWith(COMPLETED_SUFFIX)) continue
+    const filePath = path.join(dir, entry)
+    try {
+      const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as Partial<CompletedInflightSnapshot>
+      const finishedAt = raw.finishedAt ? Date.parse(raw.finishedAt) : NaN
+      if (!Number.isFinite(finishedAt) || finishedAt < cutoff) {
+        fs.unlinkSync(filePath)
+      }
+    } catch {
+      try { fs.unlinkSync(filePath) } catch {}
+    }
+  }
+}
+
+function saveCompletedInflightSnapshot(
+  meta: InflightMeta,
+  status: CompletedInflightStatus,
+  outputPreview: string,
+): void {
+  const dir = getInflightDir()
+  pruneCompletedSnapshots(dir)
+  const snapshot: CompletedInflightSnapshot = {
+    id: meta.id,
+    conversationId: meta.conversationId,
+    sessionId: meta.sessionId,
+    text: meta.text,
+    startedAt: meta.startedAt,
+    finishedAt: new Date().toISOString(),
+    status,
+    outputPreview: trimOutputPreview(outputPreview),
+  }
+  const filePath = completedSnapshotPath(meta.id)
+  const tmpPath = `${filePath}.tmp.${process.pid}`
+  try {
+    fs.writeFileSync(tmpPath, JSON.stringify(snapshot))
+    fs.renameSync(tmpPath, filePath)
+  } catch {
+    try { fs.unlinkSync(tmpPath) } catch {}
+  }
+}
+
 function sendSignalToPidGroup(pid: number, signal: NodeJS.Signals): void {
   try {
     process.kill(-pid, signal)
@@ -125,6 +217,52 @@ function isAlive(pid: number): boolean {
   } catch {
     return false
   }
+}
+
+export function listInflightTasksForSession(sessionId: string, conversationId?: string): InflightTaskSnapshot[] {
+  const dir = getInflightDir()
+  const metaFiles = fs.readdirSync(dir).filter(f => f.endsWith('.meta.json'))
+  const tasks: InflightTaskSnapshot[] = []
+
+  for (const metaFile of metaFiles) {
+    try {
+      const meta: InflightMeta = JSON.parse(fs.readFileSync(path.join(dir, metaFile), 'utf-8'))
+      if (meta.sessionId !== sessionId) continue
+      if (conversationId && meta.conversationId !== conversationId) continue
+      const outputPath = path.join(dir, meta.outputFile)
+      tasks.push({
+        id: meta.id,
+        conversationId: meta.conversationId,
+        sessionId: meta.sessionId,
+        text: meta.text,
+        pid: meta.pid,
+        startedAt: meta.startedAt,
+        outputPath,
+        outputText: readOutputText(outputPath),
+        running: meta.pid ? isAlive(meta.pid) : true,
+      })
+    } catch {}
+  }
+
+  return tasks.sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt))
+}
+
+export function listCompletedInflightSnapshotsForSession(sessionId: string, conversationId?: string): CompletedInflightSnapshot[] {
+  const dir = getInflightDir()
+  pruneCompletedSnapshots(dir)
+  const entries = fs.readdirSync(dir).filter(f => f.endsWith(COMPLETED_SUFFIX))
+  const snapshots: CompletedInflightSnapshot[] = []
+
+  for (const entry of entries) {
+    try {
+      const snapshot: CompletedInflightSnapshot = JSON.parse(fs.readFileSync(path.join(dir, entry), 'utf-8'))
+      if (snapshot.sessionId !== sessionId) continue
+      if (conversationId && snapshot.conversationId !== conversationId) continue
+      snapshots.push(snapshot)
+    } catch {}
+  }
+
+  return snapshots.sort((a, b) => Date.parse(a.finishedAt) - Date.parse(b.finishedAt))
 }
 
 // --- 内存队列 ---
@@ -235,6 +373,8 @@ async function processNext(
   }, timeoutSeconds * 1000)
 
   let streamed = false
+  let completionStatus: CompletedInflightStatus = 'completed'
+  let completionPreview = ''
   try {
     const driver = getDriver(binding.tool ?? 'claude')
     const output = await driver.sendMessage(
@@ -257,11 +397,17 @@ async function processNext(
     )
 
     updateBinding(conversationId, { turnCount: binding.turnCount + 1 })
+    completionPreview = output
     // 如果已经流式发送过，不再重复发最终累积文本
     msg.resolve(streamed ? '' : formatOutput(output, binding.sessionId, binding.transport, binding.tool))
   } catch (err) {
+    const queueState = group.state as JobState
+    completionStatus = queueState === 'cancelling' ? 'interrupted' : 'failed'
+    completionPreview = err instanceof Error ? err.message : String(err)
     msg.reject(err instanceof Error ? err : new Error(String(err)))
   } finally {
+    const outputText = readOutputText(outputFile)
+    saveCompletedInflightSnapshot(inflight, completionStatus, outputText || completionPreview)
     cleanupInflight(inflight.id)
     clearTimeout(group.timeoutTimer!)
     group.timeoutTimer = null

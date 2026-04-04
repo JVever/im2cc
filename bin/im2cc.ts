@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * @input:    CLI 参数 (start/stop/status/logs/sessions/new/connect/list/delete/detach/show/setup/secure/onboard/install-service/doctor/help/upgrade/wechat/fqon/fqoff/fqs)
- * @output:   守护进程管理 + 完整 session 管理命令（new/connect/list/delete/detach/show；list 输出按对话位置聚合）
+ * @output:   守护进程管理 + 完整 session 管理命令（new/connect/list/delete/detach/show；connect 含桌面接回保护态，list 输出按对话位置聚合）
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -23,7 +23,7 @@ import { renderLocalRegisteredSessionList, renderRegisteredSessionList, renderUn
 import { detectInstallRoot, listReplaceableInstallEntries, PUBLIC_ARCHIVE_URL } from '../src/upgrade.js'
 import { hasCustomClaudeLauncher, selectClaudeProfile } from '../src/claude-launcher.js'
 import { disableAntiPomodoro, enableAntiPomodoro, formatAntiPomodoroStatus, getAntiPomodoroSnapshot } from '../src/anti-pomodoro.js'
-import { interruptInflightTasksForSession } from '../src/queue.js'
+import { interruptInflightTasksForSession, listCompletedInflightSnapshotsForSession, listInflightTasksForSession, type CompletedInflightSnapshot, type InflightTaskSnapshot } from '../src/queue.js'
 import readline from 'node:readline'
 
 // 触发各 driver 自注册（模块级副作用）
@@ -330,14 +330,38 @@ function findTmuxSession(name: string, tool: string = 'claude'): string | null {
 
 // ─── 远程绑定解除 ───────────────────────────────────
 
+interface ReleaseRemoteBindingOptions {
+  interruptInflight?: boolean
+}
+
+interface ReleaseRemoteBindingResult {
+  conversationId: string | null
+  transport: string | null
+  interrupted: number
+}
+
 /** 解除远程端绑定并通知 IM */
-async function releaseRemoteBinding(sessionId: string, sessionName: string): Promise<void> {
+async function releaseRemoteBinding(
+  sessionId: string,
+  sessionName: string,
+  options: ReleaseRemoteBindingOptions = {},
+): Promise<ReleaseRemoteBindingResult> {
   const bindings = listActiveBindings()
   const remoteBinding = bindings.find(b => b.sessionId === sessionId)
-  if (!remoteBinding) return
+  if (!remoteBinding) {
+    return { conversationId: null, transport: null, interrupted: 0 }
+  }
 
   archiveBinding(remoteBinding.conversationId)
-  const interrupted = await interruptInflightTasksForSession(sessionId, remoteBinding.conversationId)
+  const shouldInterrupt = options.interruptInflight ?? true
+  const interrupted = shouldInterrupt
+    ? await interruptInflightTasksForSession(sessionId, remoteBinding.conversationId)
+    : 0
+  const handoffText = shouldInterrupt
+    ? (interrupted > 0
+        ? `🔄 "${sessionName}" 已转到电脑端，远程正在执行的任务已停止`
+        : `🔄 "${sessionName}" 已转到电脑端`)
+    : `🔄 "${sessionName}" 已转到电脑端，当前任务会在电脑端继续处理`
 
   // 飞书端尝试通知
   if (remoteBinding.transport === 'feishu' || !remoteBinding.transport) {
@@ -350,18 +374,178 @@ async function releaseRemoteBinding(sessionId: string, sessionName: string): Pro
         data: {
           receive_id: remoteBinding.conversationId,
           msg_type: 'text',
-          content: JSON.stringify({
-            text: interrupted > 0
-              ? `🔄 "${sessionName}" 已转到电脑端，远程正在执行的任务已停止`
-              : `🔄 "${sessionName}" 已转到电脑端`,
-          }),
+          content: JSON.stringify({ text: handoffText }),
         },
       })
     } catch { /* 通知失败不影响主流程 */ }
   }
 
-  const suffix = interrupted > 0 ? `，并中断了 ${interrupted} 个远程执行任务` : ''
+  const suffix = shouldInterrupt
+    ? (interrupted > 0 ? `，并中断了 ${interrupted} 个远程执行任务` : '')
+    : '，远程中的当前任务将继续完成'
   console.log(`🔄 已从${remoteBinding.transport ?? '远程'}端断开${suffix}`)
+  return {
+    conversationId: remoteBinding.conversationId,
+    transport: remoteBinding.transport ?? null,
+    interrupted,
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function formatElapsed(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (minutes <= 0) return `${seconds} 秒`
+  return `${minutes} 分 ${seconds} 秒`
+}
+
+function tailLines(text: string, count: number): string[] {
+  return text
+    .split('\n')
+    .map(line => line.trimEnd())
+    .filter(Boolean)
+    .slice(-count)
+}
+
+function truncateText(text: string, maxLength: number): string {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  if (normalized.length <= maxLength) return normalized
+  return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`
+}
+
+function renderDesktopHandoffProtection(params: {
+  sessionName: string
+  transportLabel: string
+  activeTasks: InflightTaskSnapshot[]
+  latestOutput: string
+  latestCompletion: CompletedInflightSnapshot | null
+  cancelRequested: boolean
+}): string {
+  const { sessionName, transportLabel, activeTasks, latestOutput, latestCompletion, cancelRequested } = params
+  const lines = [`接回保护态 · ${sessionName}`, '']
+
+  if (activeTasks.length > 0) {
+    const latestTask = activeTasks.at(-1)!
+    lines.push(`状态：${cancelRequested ? '正在中断旧任务' : '执行中'}`)
+    lines.push(`来源：${transportLabel}远程指令`)
+    lines.push(`已运行：${formatElapsed(Date.now() - Date.parse(latestTask.startedAt))}`)
+    if (activeTasks.length > 1) lines.push(`后台任务：${activeTasks.length} 个`)
+    lines.push(`指令：${truncateText(latestTask.text, 80)}`)
+    lines.push('')
+    lines.push('最近输出：')
+    const outputLines = tailLines(latestOutput, 8)
+    if (outputLines.length > 0) {
+      for (const line of outputLines) lines.push(`  ${line}`)
+    } else {
+      lines.push('  （还没有可展示的输出）')
+    }
+    lines.push('')
+    lines.push(cancelRequested
+      ? '提示：正在取消远程旧任务，完成后会立即接回电脑端'
+      : '提示：当前任务仍在执行，请不要重复发送相同指令')
+    lines.push('操作：等待完成后自动接回 ｜ Ctrl+C 取消旧任务并立即接回')
+    return `${lines.join('\n')}\n`
+  }
+
+  lines.push(`状态：${latestCompletion?.status === 'interrupted' ? '已中断' : '刚完成'}`)
+  if (latestCompletion) {
+    lines.push(`来源：${transportLabel}远程指令`)
+    lines.push(`指令：${truncateText(latestCompletion.text, 80)}`)
+    lines.push('')
+    lines.push('结果回显：')
+    const outputLines = tailLines(latestCompletion.outputPreview, 8)
+    if (outputLines.length > 0) {
+      for (const line of outputLines) lines.push(`  ${line}`)
+    } else {
+      lines.push(`  （${latestCompletion.status === 'interrupted' ? '旧任务已中断，未保留更多输出' : '任务结束，但没有可展示的输出'}）`)
+    }
+  } else {
+    lines.push('结果回显：')
+    lines.push('  （任务刚结束，但未读到可展示的结果摘要）')
+  }
+  lines.push('')
+  lines.push('提示：正在切回电脑端对话…')
+  return `${lines.join('\n')}\n`
+}
+
+async function runDesktopHandoffProtection(
+  sessionName: string,
+  sessionId: string,
+  conversationId?: string | null,
+  transport?: string | null,
+): Promise<void> {
+  const initialTasks = listInflightTasksForSession(sessionId, conversationId ?? undefined)
+  if (initialTasks.length === 0) return
+
+  const watchedIds = new Set(initialTasks.map(task => task.id))
+  const transportLabel = transport === 'wechat' ? '微信' : '飞书'
+  let cancelRequested = false
+  let cancelIssued = false
+  let latestOutput = initialTasks.at(-1)?.outputText ?? ''
+  let lastRendered = ''
+
+  const render = (activeTasks: InflightTaskSnapshot[], latestCompletion: CompletedInflightSnapshot | null) => {
+    const panel = renderDesktopHandoffProtection({
+      sessionName,
+      transportLabel,
+      activeTasks,
+      latestOutput,
+      latestCompletion,
+      cancelRequested,
+    })
+    if (process.stdout.isTTY) {
+      console.clear()
+      process.stdout.write(panel)
+    } else if (panel !== lastRendered) {
+      console.log(panel)
+    }
+    lastRendered = panel
+  }
+
+  const onSigint = () => {
+    cancelRequested = true
+  }
+  process.on('SIGINT', onSigint)
+
+  try {
+    while (true) {
+      let activeTasks = listInflightTasksForSession(sessionId, conversationId ?? undefined)
+        .filter(task => watchedIds.has(task.id))
+      if (activeTasks.length > 0) {
+        latestOutput = activeTasks.at(-1)?.outputText || latestOutput
+      }
+
+      if (cancelRequested && activeTasks.length > 0 && !cancelIssued) {
+        render(activeTasks, null)
+        await interruptInflightTasksForSession(sessionId, conversationId ?? undefined)
+        cancelIssued = true
+      }
+
+      if (cancelRequested) {
+        activeTasks = listInflightTasksForSession(sessionId, conversationId ?? undefined)
+          .filter(task => watchedIds.has(task.id))
+        if (activeTasks.length > 0) {
+          render(activeTasks, null)
+          await sleep(300)
+          continue
+        }
+      }
+
+      const latestCompletion = listCompletedInflightSnapshotsForSession(sessionId, conversationId ?? undefined)
+        .filter(snapshot => watchedIds.has(snapshot.id))
+        .at(-1) ?? null
+      render(activeTasks, latestCompletion)
+      if (activeTasks.length === 0) break
+      await sleep(700)
+    }
+  } finally {
+    process.off('SIGINT', onSigint)
+    if (process.stdout.isTTY) process.stdout.write('\n')
+  }
 }
 
 // ─── 守护进程命令 ────────────────────────────────────
@@ -738,8 +922,21 @@ async function cmdConnect(): Promise<void> {
     }
   }
 
-  // 独占：解绑远程端
-  await releaseRemoteBinding(session.sessionId, session.name)
+  const inflightTasks = listInflightTasksForSession(session.sessionId)
+  const hasInflight = inflightTasks.length > 0
+
+  // 独占：解绑远程端；如果旧任务仍在执行，则进入保护态而不是直接中断
+  const handoff = await releaseRemoteBinding(session.sessionId, session.name, {
+    interruptInflight: !hasInflight,
+  })
+  if (hasInflight) {
+    await runDesktopHandoffProtection(
+      session.name,
+      session.sessionId,
+      handoff.conversationId,
+      handoff.transport,
+    )
+  }
 
   // 查找已有 tmux session
   const tmux = findTmuxSession(session.name, tool)
