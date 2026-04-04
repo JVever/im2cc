@@ -22,7 +22,7 @@ import { getDriver } from './tool-driver.js'
 import { stageFile, consumeStaged, ensureInbox, classifyFile, runInboxCleanup } from './file-staging.js'
 import { buildRecapMessages } from './recap.js'
 import { log, error } from './logger.js'
-import type { TransportAdapter, IncomingMessage, TransportType } from './transport.js'
+import type { TransportAdapter, IncomingMessage, OutgoingMessage, TransportType } from './transport.js'
 import {
   ANTI_POMODORO_IM_COMMANDS,
   AntiPomodoroDaemonController,
@@ -32,6 +32,7 @@ import {
   getAntiPomodoroSnapshot,
   queueDelayedReply,
 } from './anti-pomodoro.js'
+import { structureSystemReply } from './message-format.js'
 import {
   DAEMON_LOCK_STARTUP_GRACE_MS,
   DAEMON_MARKER,
@@ -213,20 +214,27 @@ export async function startDaemon(): Promise<void> {
   )
 
   /** 通过 transport 类型找到对应 adapter 发送消息 */
-  function sendToConversation(transport: TransportType, conversationId: string, text: string): Promise<void> {
+  function sendToConversation(
+    transport: TransportType,
+    conversationId: string,
+    message: string | OutgoingMessage,
+  ): Promise<void> {
     const adapter = adapters.get(transport)
     if (!adapter) {
       error(`[send] 无可用 adapter: ${transport}`)
       return Promise.resolve()
     }
-    return adapter.sendText(conversationId, text)
+    if (typeof message === 'string') {
+      return adapter.sendText(conversationId, message)
+    }
+    return adapter.sendMessage(conversationId, message)
   }
 
   /** 根据 conversationId 从 binding 推断 transport 并发送消息 */
-  async function sendByConversationId(conversationId: string, text: string): Promise<void> {
+  async function sendByConversationId(conversationId: string, message: string | OutgoingMessage): Promise<void> {
     const binding = getBinding(conversationId)
     const transport = binding?.transport ?? 'feishu'
-    return sendToConversation(transport, conversationId, text)
+    return sendToConversation(transport, conversationId, message)
   }
 
   // 消息处理（transport 无关）
@@ -250,13 +258,14 @@ export async function startDaemon(): Promise<void> {
       return
     }
 
-    const send = (text: string) => sendToConversation(transport, conversationId, text)
+    const send = (message: string | OutgoingMessage) => sendToConversation(transport, conversationId, message)
+    const sendSystem = (text: string) => send(structureSystemReply(text))
     const antiPomodoroSnapshot = getAntiPomodoroSnapshot()
 
     // 文件消息处理
     if (msg.kind === 'file') {
       if (antiPomodoroSnapshot.enabled && antiPomodoroSnapshot.phase === 'rest') {
-        await send(formatAntiPomodoroRestFileBlocked(antiPomodoroSnapshot))
+        await sendSystem(formatAntiPomodoroRestFileBlocked(antiPomodoroSnapshot))
         return
       }
 
@@ -307,10 +316,10 @@ export async function startDaemon(): Promise<void> {
         })
 
         const displayName = msg.msgType === 'image' ? '图片' : msg.fileName
-        await send(`已收到${displayName}，请发送你的指令`)
+        await sendSystem(`已收到${displayName}，请发送你的指令`)
       } catch (err) {
         error(`[file] 下载失败 [${conversationId}]: ${err}`)
-        await send(`文件下载失败: ${err instanceof Error ? err.message : String(err)}`)
+        await sendSystem(`文件下载失败: ${err instanceof Error ? err.message : String(err)}`)
       }
       return
     }
@@ -324,7 +333,7 @@ export async function startDaemon(): Promise<void> {
     if (cmd) {
       if (antiPomodoroSnapshot.enabled && antiPomodoroSnapshot.phase === 'rest'
         && !ANTI_POMODORO_IM_COMMANDS.has(cmd.command)) {
-        await send(formatAntiPomodoroRestCommandBlocked(antiPomodoroSnapshot))
+        await sendSystem(formatAntiPomodoroRestCommandBlocked(antiPomodoroSnapshot))
         return
       }
 
@@ -361,21 +370,21 @@ export async function startDaemon(): Promise<void> {
                   await send(message)
                 }
               } else {
-                await send(reply)
+                await sendSystem(reply)
               }
             } catch (err) {
               log(`[recap] 生成失败: ${err}`)
-              await send(reply)
+              await sendSystem(reply)
             }
           } else {
-            await send(reply)
+            await sendSystem(reply)
           }
         } else {
-          await send(reply)
+          await sendSystem(reply)
         }
       } catch (err) {
         error(`命令执行失败 [${conversationId}] /${cmd.command}: ${err}`)
-        await send(`命令执行失败: ${err instanceof Error ? err.message : String(err)}`)
+        await sendSystem(`命令执行失败: ${err instanceof Error ? err.message : String(err)}`)
       }
     } else {
       // 普通消息：入队列发给 AI 工具
@@ -391,7 +400,7 @@ export async function startDaemon(): Promise<void> {
           }
         }
         lines.push('', '发 /fc <名称> 接入，或 /fn <名称> 新建')
-        await send(lines.join('\n'))
+        await sendSystem(lines.join('\n'))
         return
       }
 
@@ -403,14 +412,14 @@ export async function startDaemon(): Promise<void> {
       if (regEntry && isSessionLocallyActive(regEntry.name, regEntry.tool)) {
         archiveBinding(conversationId)
         log(`[${conversationId}] 检测到 "${regEntry.name}" 在电脑端活跃，自动解绑`)
-        await send(
+        await sendSystem(
           `"${regEntry.name}" 正在电脑端使用，已自动断开。\n\n等电脑端关闭后，发 /fc ${regEntry.name} 重新接入。`)
         return
       }
 
       const quotaDecision = claimRestQuota()
       if (!quotaDecision.allowed) {
-        await send(quotaDecision.rejection!)
+        await sendSystem(quotaDecision.rejection!)
         return
       }
 
@@ -431,7 +440,7 @@ export async function startDaemon(): Promise<void> {
       }
 
       if (quotaDecision.notice) {
-        await send(quotaDecision.notice)
+        await sendSystem(quotaDecision.notice)
       }
 
       enqueue(

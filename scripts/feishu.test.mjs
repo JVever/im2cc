@@ -66,3 +66,31 @@ test('FeishuAdapter does not recreate client for non-timeout errors', async () =
   assert.equal(rebuilds, 0)
   assert.equal(adapter.client, originalClient)
 })
+
+test('FeishuAdapter sends structured panel messages as post payloads', async () => {
+  const adapter = new FeishuAdapter(makeConfig())
+  let captured = null
+
+  adapter.client = {
+    im: {
+      message: {
+        create: async (payload) => {
+          captured = payload
+          return {}
+        },
+      },
+    },
+  }
+
+  await adapter.sendMessage('oc_test', {
+    kind: 'panel',
+    title: '反茄钟',
+    sections: [{ lines: ['状态：进行中'] }],
+  })
+
+  assert.ok(captured)
+  assert.equal(captured.data.msg_type, 'post')
+  const content = JSON.parse(captured.data.content)
+  assert.equal(content.zh_cn.title, '反茄钟')
+  assert.match(content.zh_cn.content[0][0].text, /\*\*状态：\*\*/)
+})

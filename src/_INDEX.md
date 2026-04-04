@@ -17,6 +17,7 @@ im2cc 核心业务逻辑：IM 消息接收 → 命令路由 → 本地 AI coding
 - upgrade.ts：升级辅助逻辑（定位安装根目录、公开源码包升级辅助）
 - session.ts：Session 绑定 CRUD、原子写、消息去重
 - anti-pomodoro.ts：反茄钟状态机（全局周期、休息期单次后台指令额度、延迟结果队列、daemon 同步与失败重试）
+- message-format.ts：统一结构化出站消息抽象（系统回复识别、飞书 post 渲染、微信纯文本降级）
 - claude-driver.ts：Claude Code CLI 驱动（spawn、stream-json 解析、中断）
 - codex-driver.ts：Codex CLI 驱动（thread_id 创建、resume、输出解析）
 - gemini-driver.ts：Gemini CLI 驱动（best-effort，session_id 创建、resume、输出解析）
@@ -27,7 +28,7 @@ im2cc 核心业务逻辑：IM 消息接收 → 命令路由 → 本地 AI coding
 - registry.ts：命名 session 注册表（register/lookup/list/remove，永久寻址）
 - discover.ts：扫描本地 Claude Code 对话，并处理 Claude/Codex 的 session 漂移同步（Codex 会尝试匹配 tmux pane 可见内容到真实 thread）
 - recap.ts：上下文回顾（过滤 init 消息、格式化最近一轮对话、/fc 时按最多 3 条消息发送）
-- feishu.ts：飞书 REST 轮询适配器（定时拉取群消息、发消息、资源下载）
-- wechat.ts：微信 ClawBot iLink 适配器（文本长轮询、发送、绑定）
+- feishu.ts：飞书 REST 轮询适配器（定时拉取群消息、文本/富文本发送、资源下载）
+- wechat.ts：微信 ClawBot iLink 适配器（文本长轮询、结构化消息文本降级发送、绑定）
 - poll-cursor.ts：轮询游标持久化（per-group 游标读写，原子文件操作）
 - file-staging.ts：文件暂存管理（inbox 目录、格式校验、TTL 清理、暂存队列）

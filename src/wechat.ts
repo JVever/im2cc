@@ -6,10 +6,11 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import type { TransportAdapter, IncomingMessage } from './transport.js'
+import type { TransportAdapter, IncomingMessage, OutgoingMessage } from './transport.js'
 import type { WeChatAccount } from './config.js'
 import { saveWeChatAccount, getDataDir } from './config.js'
 import { log, error } from './logger.js'
+import { renderOutgoingMessageAsText } from './message-format.js'
 
 // --- context_token 持久化（含有效期和使用计数追踪）---
 
@@ -191,6 +192,14 @@ export class WeChatAdapter implements TransportAdapter {
   }
 
   async sendText(conversationId: string, text: string): Promise<void> {
+    return this.sendRawText(conversationId, text)
+  }
+
+  async sendMessage(conversationId: string, message: OutgoingMessage): Promise<void> {
+    return this.sendRawText(conversationId, renderOutgoingMessageAsText(message))
+  }
+
+  private async sendRawText(conversationId: string, text: string): Promise<void> {
     if (!this.tokenValid) {
       throw new Error('微信 token 已失效，请运行 im2cc wechat login 重新认证')
     }

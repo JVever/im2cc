@@ -8,9 +8,10 @@ import fs from 'node:fs'
 import * as lark from '@larksuiteoapi/node-sdk'
 import axios from 'axios'
 import type { Im2ccConfig } from './config.js'
-import type { TransportAdapter, IncomingMessage } from './transport.js'
+import type { TransportAdapter, IncomingMessage, OutgoingMessage } from './transport.js'
 import { getCursor, setCursor, initCursorIfMissing } from './poll-cursor.js'
 import { log, error } from './logger.js'
+import { buildFeishuMessage } from './message-format.js'
 
 // --- Bot 群列表缓存 ---
 
@@ -112,14 +113,19 @@ export class FeishuAdapter implements TransportAdapter {
   }
 
   async sendText(conversationId: string, text: string): Promise<void> {
+    return this.sendMessage(conversationId, { kind: 'text', text })
+  }
+
+  async sendMessage(conversationId: string, message: OutgoingMessage): Promise<void> {
+    const payload = buildFeishuMessage(message)
     try {
       await this.runRequest(`发送消息到 ${conversationId}`, () =>
         this.client.im.message.create({
           params: { receive_id_type: 'chat_id' },
           data: {
             receive_id: conversationId,
-            msg_type: 'text',
-            content: JSON.stringify({ text }),
+            msg_type: payload.msgType,
+            content: payload.content,
           },
         }))
     } catch (err) {
