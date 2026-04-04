@@ -13,7 +13,7 @@ export const ANTI_POMODORO_REST_MS = 30 * 60 * 1000
 export const ANTI_POMODORO_IM_COMMANDS = new Set(['fqon', 'fqoff', 'fqs'])
 const ANTI_POMODORO_RETRY_MS = 15 * 1000
 
-export type AntiPomodoroPhase = 'work' | 'rest'
+export type AntiPomodoroPhase = 'waiting' | 'work' | 'rest'
 
 interface DelayedReply {
   conversationId: string
@@ -65,7 +65,7 @@ function createDisabledState(now: number = Date.now()): AntiPomodoroState {
   return {
     version: 1,
     enabled: false,
-    phase: 'work',
+    phase: 'waiting',
     phaseStartedAt: iso,
     phaseEndsAt: iso,
     workMs: ANTI_POMODORO_WORK_MS,
@@ -83,7 +83,7 @@ function sanitizeState(raw: Partial<AntiPomodoroState> | null | undefined, now: 
   return {
     version: 1,
     enabled: raw.enabled === true,
-    phase: raw.phase === 'rest' ? 'rest' : 'work',
+    phase: raw.phase === 'rest' || raw.phase === 'work' ? raw.phase : 'waiting',
     phaseStartedAt: typeof raw.phaseStartedAt === 'string' ? raw.phaseStartedAt : base.phaseStartedAt,
     phaseEndsAt: typeof raw.phaseEndsAt === 'string' ? raw.phaseEndsAt : base.phaseEndsAt,
     workMs: typeof raw.workMs === 'number' && raw.workMs > 0 ? raw.workMs : base.workMs,
@@ -135,16 +135,34 @@ function normalizePhaseTimestamps(state: AntiPomodoroState, now: number): boolea
   if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs >= startMs) return false
 
   const startAt = now
-  const duration = state.phase === 'rest' ? state.restMs : state.workMs
+  const duration = state.phase === 'rest' ? state.restMs : state.phase === 'work' ? state.workMs : 0
   state.phaseStartedAt = nowIso(startAt)
   state.phaseEndsAt = nowIso(startAt + duration)
   state.updatedAt = nowIso(now)
   return true
 }
 
-function reconcileState(state: AntiPomodoroState, now: number = Date.now()): { state: AntiPomodoroState, changed: boolean, enteredWork: boolean } {
+function setPhase(
+  state: AntiPomodoroState,
+  phase: AntiPomodoroPhase,
+  phaseStartAtMs: number,
+  updatedAtMs: number = phaseStartAtMs,
+): void {
+  state.phase = phase
+  state.phaseStartedAt = nowIso(phaseStartAtMs)
+  state.phaseEndsAt = nowIso(
+    phase === 'work'
+      ? phaseStartAtMs + state.workMs
+      : phase === 'rest'
+        ? phaseStartAtMs + state.restMs
+        : phaseStartAtMs,
+  )
+  state.restQuotaUsed = false
+  state.updatedAt = nowIso(updatedAtMs)
+}
+
+function reconcileState(state: AntiPomodoroState, now: number = Date.now()): { state: AntiPomodoroState, changed: boolean } {
   let changed = normalizePhaseTimestamps(state, now)
-  let enteredWork = false
 
   if (!state.enabled) {
     if (state.delayedReplies.length > 0 || state.restQuotaUsed) {
@@ -153,29 +171,27 @@ function reconcileState(state: AntiPomodoroState, now: number = Date.now()): { s
       state.updatedAt = nowIso(now)
       changed = true
     }
-    return { state, changed, enteredWork }
+    return { state, changed }
   }
 
-  let cursor = phaseEndMs(state)
-  while (cursor <= now) {
+  if (state.phase === 'waiting') {
+    return { state, changed }
+  }
+
+  while (phaseEndMs(state) <= now) {
+    const cursor = phaseEndMs(state)
     if (state.phase === 'work') {
-      state.phase = 'rest'
-      state.phaseStartedAt = nowIso(cursor)
-      state.phaseEndsAt = nowIso(cursor + state.restMs)
-      state.restQuotaUsed = false
+      setPhase(state, 'rest', cursor, now)
+      changed = true
+      continue
     } else {
-      state.phase = 'work'
-      state.phaseStartedAt = nowIso(cursor)
-      state.phaseEndsAt = nowIso(cursor + state.workMs)
-      state.restQuotaUsed = false
-      enteredWork = true
+      setPhase(state, 'waiting', cursor, now)
+      changed = true
+      break
     }
-    state.updatedAt = nowIso(now)
-    cursor = phaseEndMs(state)
-    changed = true
   }
 
-  return { state, changed, enteredWork }
+  return { state, changed }
 }
 
 function toSnapshot(state: AntiPomodoroState, now: number = Date.now()): AntiPomodoroSnapshot {
@@ -193,7 +209,7 @@ function toSnapshot(state: AntiPomodoroState, now: number = Date.now()): AntiPom
   return {
     enabled: true,
     phase: state.phase,
-    remainingMs: Math.max(0, phaseEndMs(state) - now),
+    remainingMs: state.phase === 'waiting' ? 0 : Math.max(0, phaseEndMs(state) - now),
     workMs: state.workMs,
     restMs: state.restMs,
     restQuotaUsed: state.restQuotaUsed,
@@ -226,14 +242,23 @@ function statusLines(snapshot: AntiPomodoroSnapshot): string[] {
     ]
   }
 
-  const phaseLabel = snapshot.phase === 'rest' ? '休息时间' : '工作时间'
+  const phaseLabel = snapshot.phase === 'rest'
+    ? '休息时间'
+    : snapshot.phase === 'work'
+      ? '工作时间'
+      : '等待开始'
   const lines = [
     '状态：进行中',
     `阶段：${phaseLabel}`,
-    `剩余：${formatDuration(snapshot.remainingMs)}`,
     `节奏：${Math.floor(snapshot.workMs / 60000)} 分钟工作 / ${Math.floor(snapshot.restMs / 60000)} 分钟休息`,
     '范围：飞书、微信、不同对话全局共享',
   ]
+
+  if (snapshot.phase === 'waiting') {
+    lines.splice(2, 0, '触发：发送下一条工作消息后开始 5 分钟工作时间')
+  } else {
+    lines.splice(2, 0, `剩余：${formatDuration(snapshot.remainingMs)}`)
+  }
 
   if (snapshot.phase === 'rest') {
     lines.push(`休息期后台指令：${snapshot.restQuotaUsed ? '已用完' : '可用 1 次'}`)
@@ -257,7 +282,8 @@ export function formatAntiPomodoroRemoteOffDenied(snapshot: AntiPomodoroSnapshot
 export function formatAntiPomodoroRestCommandBlocked(snapshot: AntiPomodoroSnapshot): string {
   return renderCard('⛔ 现在是休息时间', [
     '限制：当前不接受这个命令',
-    `继续：请等 ${formatDuration(snapshot.remainingMs)} 后进入下一个工作窗口`,
+    `继续：请等 ${formatDuration(snapshot.remainingMs)} 后结束休息`,
+    '之后：电脑端结果会恢复推送；新的工作时间仍由你下一条工作消息开启',
     '查看：发送 /fqs 可查看当前状态',
   ])
 }
@@ -265,8 +291,16 @@ export function formatAntiPomodoroRestCommandBlocked(snapshot: AntiPomodoroSnaps
 export function formatAntiPomodoroRestFileBlocked(snapshot: AntiPomodoroSnapshot): string {
   return renderCard('⛔ 现在是休息时间', [
     '限制：当前不接受文件或图片',
-    `继续：请等 ${formatDuration(snapshot.remainingMs)} 后进入下一个工作窗口`,
+    `继续：请等 ${formatDuration(snapshot.remainingMs)} 后结束休息`,
+    '之后：电脑端结果会恢复推送；新的工作时间仍由你下一条工作消息开启',
     '查看：发送 /fqs 可查看当前状态',
+  ])
+}
+
+export function formatAntiPomodoroWorkStarted(snapshot: AntiPomodoroSnapshot): string {
+  return renderCard('▶️ 已开始本轮工作时间', [
+    `剩余：${formatDuration(snapshot.remainingMs)}`,
+    `结束：到时自动进入 ${Math.floor(snapshot.restMs / 60000)} 分钟休息`,
   ])
 }
 
@@ -292,12 +326,8 @@ export function enableAntiPomodoro(now: number = Date.now()): ToggleResult {
   const state = readState(now)
   if (!state.enabled) {
     state.enabled = true
-    state.phase = 'work'
-    state.phaseStartedAt = nowIso(now)
-    state.phaseEndsAt = nowIso(now + state.workMs)
-    state.restQuotaUsed = false
+    setPhase(state, 'waiting', now, now)
     state.delayedReplies = []
-    state.updatedAt = nowIso(now)
     writeState(state)
     const snapshot = toSnapshot(state, now)
     return { changed: true, message: buildEnableMessage(snapshot, true), snapshot }
@@ -353,7 +383,7 @@ export function claimRestQuota(now: number = Date.now()): RestQuotaDecision {
       allowed: true,
       notice: renderCard('⏳ 已使用本轮休息期后台指令', [
         '处理：这 1 条消息已发给电脑继续工作',
-        '送达：结果会在下一个工作窗口再发回手机',
+        '送达：结果会在本轮休息结束后恢复推送',
         `额度：本轮休息期已用完，请等 ${formatDuration(snapshot.remainingMs)} 后再继续`,
       ]),
       snapshot: toSnapshot(current, now),
@@ -365,7 +395,7 @@ export function claimRestQuota(now: number = Date.now()): RestQuotaDecision {
     rejection: renderCard('⛔ 现在是休息时间', [
       '限制：本轮休息期的 1 条后台指令额度已用完',
       '处理：这条消息不会发给电脑，也不会缓存',
-      `继续：请等 ${formatDuration(snapshot.remainingMs)} 后进入下一个工作窗口`,
+      `继续：请等 ${formatDuration(snapshot.remainingMs)} 后结束休息`,
     ]),
     snapshot,
   }
@@ -391,12 +421,32 @@ export function queueDelayedReply(conversationId: string, text: string, now: num
   return true
 }
 
+export function startWorkPhaseIfWaiting(now: number = Date.now()): { started: boolean, snapshot: AntiPomodoroSnapshot } {
+  const state = readState(now)
+  const reconciled = reconcileState(state, now)
+  const current = reconciled.state
+
+  if (!current.enabled) {
+    if (reconciled.changed) writeState(current)
+    return { started: false, snapshot: toSnapshot(current, now) }
+  }
+
+  if (current.phase === 'waiting') {
+    setPhase(current, 'work', now, now)
+    writeState(current)
+    return { started: true, snapshot: toSnapshot(current, now) }
+  }
+
+  if (reconciled.changed) writeState(current)
+  return { started: false, snapshot: toSnapshot(current, now) }
+}
+
 export function drainDeliverableReplies(now: number = Date.now()): Array<{ conversationId: string, text: string }> {
   const state = readState(now)
   const reconciled = reconcileState(state, now)
   const current = reconciled.state
 
-  if (!current.enabled || current.phase !== 'work' || current.delayedReplies.length === 0) {
+  if (!current.enabled || current.phase === 'rest' || current.delayedReplies.length === 0) {
     if (reconciled.changed) writeState(current)
     return []
   }
@@ -414,7 +464,7 @@ function getNextDeliverableReply(now: number = Date.now()): DelayedReply | null 
   const current = reconciled.state
 
   if (reconciled.changed) writeState(current)
-  if (!current.enabled || current.phase !== 'work' || current.delayedReplies.length === 0) {
+  if (!current.enabled || current.phase === 'rest' || current.delayedReplies.length === 0) {
     return null
   }
 
@@ -518,7 +568,7 @@ export class AntiPomodoroDaemonController {
       this.timer = null
     }
 
-    if (!state.enabled && overrideDelayMs == null) return
+    if ((!state.enabled || state.phase === 'waiting') && overrideDelayMs == null) return
 
     const delayMs = Math.max(250, overrideDelayMs ?? (phaseEndMs(state) - now + 50))
     this.timer = setTimeout(() => {

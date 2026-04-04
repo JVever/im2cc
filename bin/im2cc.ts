@@ -23,6 +23,7 @@ import { renderLocalRegisteredSessionList, renderRegisteredSessionList, renderUn
 import { detectInstallRoot, listReplaceableInstallEntries, PUBLIC_ARCHIVE_URL } from '../src/upgrade.js'
 import { hasCustomClaudeLauncher, selectClaudeProfile } from '../src/claude-launcher.js'
 import { disableAntiPomodoro, enableAntiPomodoro, formatAntiPomodoroStatus, getAntiPomodoroSnapshot } from '../src/anti-pomodoro.js'
+import { interruptInflightTasksForSession } from '../src/queue.js'
 import readline from 'node:readline'
 
 // 触发各 driver 自注册（模块级副作用）
@@ -336,6 +337,7 @@ async function releaseRemoteBinding(sessionId: string, sessionName: string): Pro
   if (!remoteBinding) return
 
   archiveBinding(remoteBinding.conversationId)
+  const interrupted = await interruptInflightTasksForSession(sessionId, remoteBinding.conversationId)
 
   // 飞书端尝试通知
   if (remoteBinding.transport === 'feishu' || !remoteBinding.transport) {
@@ -348,13 +350,18 @@ async function releaseRemoteBinding(sessionId: string, sessionName: string): Pro
         data: {
           receive_id: remoteBinding.conversationId,
           msg_type: 'text',
-          content: JSON.stringify({ text: `🔄 "${sessionName}" 已转到电脑端` }),
+          content: JSON.stringify({
+            text: interrupted > 0
+              ? `🔄 "${sessionName}" 已转到电脑端，远程正在执行的任务已停止`
+              : `🔄 "${sessionName}" 已转到电脑端`,
+          }),
         },
       })
     } catch { /* 通知失败不影响主流程 */ }
   }
 
-  console.log(`🔄 已从${remoteBinding.transport ?? '远程'}端断开`)
+  const suffix = interrupted > 0 ? `，并中断了 ${interrupted} 个远程执行任务` : ''
+  console.log(`🔄 已从${remoteBinding.transport ?? '远程'}端断开${suffix}`)
 }
 
 // ─── 守护进程命令 ────────────────────────────────────

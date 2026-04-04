@@ -29,8 +29,10 @@ import {
   claimRestQuota,
   formatAntiPomodoroRestCommandBlocked,
   formatAntiPomodoroRestFileBlocked,
+  formatAntiPomodoroWorkStarted,
   getAntiPomodoroSnapshot,
   queueDelayedReply,
+  startWorkPhaseIfWaiting,
 } from './anti-pomodoro.js'
 import { structureSystemReply } from './message-format.js'
 import {
@@ -233,8 +235,11 @@ export async function startDaemon(): Promise<void> {
   /** 根据 conversationId 从 binding 推断 transport 并发送消息 */
   async function sendByConversationId(conversationId: string, message: string | OutgoingMessage): Promise<void> {
     const binding = getBinding(conversationId)
-    const transport = binding?.transport ?? 'feishu'
-    return sendToConversation(transport, conversationId, message)
+    if (!binding) {
+      log(`[${conversationId}] 丢弃出站消息：当前无活跃远程绑定`)
+      return
+    }
+    return sendToConversation(binding.transport, conversationId, message)
   }
 
   // 消息处理（transport 无关）
@@ -417,6 +422,8 @@ export async function startDaemon(): Promise<void> {
         return
       }
 
+      const workStart = startWorkPhaseIfWaiting()
+
       const quotaDecision = claimRestQuota()
       if (!quotaDecision.allowed) {
         await sendSystem(quotaDecision.rejection!)
@@ -441,6 +448,9 @@ export async function startDaemon(): Promise<void> {
 
       if (quotaDecision.notice) {
         await sendSystem(quotaDecision.notice)
+      }
+      if (workStart.started) {
+        await sendSystem(formatAntiPomodoroWorkStarted(workStart.snapshot))
       }
 
       enqueue(

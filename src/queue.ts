@@ -21,6 +21,8 @@ interface QueuedMessage {
   text: string
   resolve: (result: string) => void
   reject: (err: Error) => void
+  sendReply: (text: string) => Promise<void>
+  expectedSessionId: string | null
 }
 
 interface GroupState {
@@ -106,6 +108,25 @@ function cleanupInflight(id: string): void {
   try { fs.unlinkSync(path.join(dir, `${id}.output`)) } catch {}
 }
 
+function sendSignalToPidGroup(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(-pid, signal)
+    return
+  } catch {}
+  try {
+    process.kill(pid, signal)
+  } catch {}
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
 // --- 内存队列 ---
 
 const groups = new Map<string, GroupState>()
@@ -119,6 +140,21 @@ function getGroup(conversationId: string): GroupState {
   return g
 }
 
+function isQueuedMessageStillAttached(msg: QueuedMessage): boolean {
+  const current = getBinding(msg.conversationId)
+  if (!current) return false
+  if (msg.expectedSessionId && current.sessionId !== msg.expectedSessionId) return false
+  return true
+}
+
+async function sendQueuedReplyIfAttached(msg: QueuedMessage, text: string): Promise<void> {
+  if (!isQueuedMessageStillAttached(msg)) {
+    log(`[${msg.conversationId}] 结果已丢弃：远程连接已断开或已切换到其他对话`)
+    return
+  }
+  await msg.sendReply(text)
+}
+
 /** 将普通消息入队 */
 export function enqueue(
   conversationId: string,
@@ -127,15 +163,25 @@ export function enqueue(
   timeoutSeconds: number,
 ): void {
   const group = getGroup(conversationId)
+  const binding = getBinding(conversationId)
+  let entry!: QueuedMessage
 
   const promise = new Promise<string>((resolve, reject) => {
-    group.queue.push({ conversationId, text, resolve, reject })
+    entry = {
+      conversationId,
+      text,
+      resolve,
+      reject,
+      sendReply,
+      expectedSessionId: binding?.sessionId ?? null,
+    }
+    group.queue.push(entry)
     savePending()
   })
 
   // 通知用户排队状态
   if (group.state === 'busy') {
-    sendReply(`⏳ 已收到，当前有任务执行中，排在第 ${group.queue.length} 位`).catch(() => {})
+    sendQueuedReplyIfAttached(entry, `⏳ 已收到，当前有任务执行中，排在第 ${group.queue.length} 位`).catch(() => {})
   }
 
   // 如果空闲，立即处理
@@ -144,8 +190,9 @@ export function enqueue(
   }
 
   // 结果回传飞书（如果已经流式发送过了，result 为空，跳过）
-  promise.then(result => { if (result) sendReply(result).catch(() => {}) })
-    .catch(err => sendReply(formatError(err)))
+  promise.then(result => {
+    if (result) sendQueuedReplyIfAttached(entry, result).catch(() => {})
+  }).catch(err => sendQueuedReplyIfAttached(entry, formatError(err)).catch(() => {}))
 }
 
 /** 处理队列中的下一条消息 */
@@ -169,6 +216,7 @@ async function processNext(
     processNext(conversationId, sendReply, timeoutSeconds)
     return
   }
+  msg.expectedSessionId = binding.sessionId
 
   group.state = 'busy'
   log(`[${conversationId}] 开始执行: ${msg.text.slice(0, 30)}...`)
@@ -203,7 +251,7 @@ async function processNext(
         onTurnText: (text) => {
           // 每轮 assistant 文字就绪后立即发到 IM
           streamed = true
-          sendReply(formatOutput(text, binding.sessionId, binding.transport, binding.tool)).catch(() => {})
+          sendQueuedReplyIfAttached(msg, formatOutput(text, binding.sessionId, binding.transport, binding.tool)).catch(() => {})
         },
       },
     )
@@ -273,8 +321,14 @@ export async function recoverOnStartup(
 
       // 获取 transport 类型用于格式化
       const recoveryBinding = getBinding(meta.conversationId)
-      const recoveryTransport = recoveryBinding?.transport ?? 'feishu' as const
-      const recoveryTool = recoveryBinding?.tool ?? 'claude'
+      if (!recoveryBinding || recoveryBinding.sessionId !== meta.sessionId) {
+        log(`[recovery] 已丢弃 "${meta.text.slice(0, 30)}..." 的结果：远程连接已断开或已切换`)
+        try { fs.unlinkSync(path.join(dir, metaFile)) } catch {}
+        try { fs.unlinkSync(outputPath) } catch {}
+        continue
+      }
+      const recoveryTransport = recoveryBinding.transport ?? 'feishu' as const
+      const recoveryTool = recoveryBinding.tool ?? 'claude'
 
       if (resultText) {
         await sendToGroup(meta.conversationId, formatOutput(resultText, meta.sessionId, recoveryTransport, recoveryTool))
@@ -302,4 +356,33 @@ export async function recoverOnStartup(
       enqueue(entry.conversationId, entry.text, makeSendReply(entry.conversationId), timeoutSeconds)
     }
   }
+}
+
+/** 本地接回电脑时，中断仍在为旧远程连接执行的 inflight 任务。 */
+export async function interruptInflightTasksForSession(sessionId: string, conversationId?: string): Promise<number> {
+  const dir = getInflightDir()
+  const metaFiles = fs.readdirSync(dir).filter(f => f.endsWith('.meta.json'))
+  let interrupted = 0
+
+  for (const metaFile of metaFiles) {
+    try {
+      const meta: InflightMeta = JSON.parse(fs.readFileSync(path.join(dir, metaFile), 'utf-8'))
+      if (meta.sessionId !== sessionId) continue
+      if (conversationId && meta.conversationId !== conversationId) continue
+      if (!meta.pid || !isAlive(meta.pid)) continue
+
+      sendSignalToPidGroup(meta.pid, 'SIGINT')
+      await new Promise(resolve => setTimeout(resolve, 300))
+      if (isAlive(meta.pid)) {
+        sendSignalToPidGroup(meta.pid, 'SIGTERM')
+        await new Promise(resolve => setTimeout(resolve, 500))
+      }
+      if (isAlive(meta.pid)) {
+        sendSignalToPidGroup(meta.pid, 'SIGKILL')
+      }
+      interrupted += 1
+    } catch {}
+  }
+
+  return interrupted
 }

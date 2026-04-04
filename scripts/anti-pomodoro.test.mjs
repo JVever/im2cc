@@ -21,20 +21,26 @@ function readPersistedState() {
   )
 }
 
-test('anti-pomodoro rest quota is single-use and delayed replies flush on next work window', () => {
+test('anti-pomodoro waits for first work message, then enters rest and returns to waiting', () => {
   resetState()
 
   const t0 = Date.UTC(2026, 0, 1, 0, 0, 0)
-  const workStart = antiPomodoro.enableAntiPomodoro(t0)
-  assert.equal(workStart.changed, true)
-  assert.match(workStart.message, /已开启反茄钟/)
+  const enabled = antiPomodoro.enableAntiPomodoro(t0)
+  assert.equal(enabled.changed, true)
+  assert.match(enabled.message, /已开启反茄钟/)
+  assert.equal(enabled.snapshot.phase, 'waiting')
+  assert.match(enabled.message, /发送下一条工作消息后开始 5 分钟工作时间/)
+
+  const firstWorkAt = t0 + 1000
+  const workStart = antiPomodoro.startWorkPhaseIfWaiting(firstWorkAt)
+  assert.equal(workStart.started, true)
   assert.equal(workStart.snapshot.phase, 'work')
 
-  const restAt = t0 + antiPomodoro.ANTI_POMODORO_WORK_MS + 1000
+  const restAt = firstWorkAt + antiPomodoro.ANTI_POMODORO_WORK_MS + 1000
   const firstClaim = antiPomodoro.claimRestQuota(restAt)
   assert.equal(firstClaim.allowed, true)
   assert.match(firstClaim.notice, /已使用本轮休息期后台指令/)
-  assert.match(firstClaim.notice, /结果会在下一个工作窗口再发回手机/)
+  assert.match(firstClaim.notice, /结果会在本轮休息结束后恢复推送/)
   assert.equal(firstClaim.snapshot.phase, 'rest')
   assert.equal(firstClaim.snapshot.restQuotaUsed, true)
 
@@ -50,12 +56,23 @@ test('anti-pomodoro rest quota is single-use and delayed replies flush on next w
   assert.match(restStatus, /范围：飞书、微信、不同对话全局共享/)
   assert.doesNotMatch(restStatus, /待送达/)
 
-  const nextWorkAt = restAt + antiPomodoro.ANTI_POMODORO_REST_MS + 1000
-  const drained = antiPomodoro.drainDeliverableReplies(nextWorkAt)
+  const waitingAt = restAt + antiPomodoro.ANTI_POMODORO_REST_MS + 1000
+  const waitingStatus = antiPomodoro.formatAntiPomodoroStatus(antiPomodoro.getAntiPomodoroSnapshot(waitingAt))
+  assert.match(waitingStatus, /阶段：等待开始/)
+  assert.match(waitingStatus, /发送下一条工作消息后开始 5 分钟工作时间/)
+
+  const drained = antiPomodoro.drainDeliverableReplies(waitingAt)
   assert.deepEqual(drained, [{ conversationId: 'conv-a', text: 'done' }])
 
-  const drainedAgain = antiPomodoro.drainDeliverableReplies(nextWorkAt + 1000)
+  const drainedAgain = antiPomodoro.drainDeliverableReplies(waitingAt + 1000)
   assert.deepEqual(drainedAgain, [])
+
+  const lateQueue = antiPomodoro.queueDelayedReply('conv-a', 'late-result', waitingAt + 2000)
+  assert.equal(lateQueue, false)
+
+  const secondWork = antiPomodoro.startWorkPhaseIfWaiting(waitingAt + 3000)
+  assert.equal(secondWork.started, true)
+  assert.equal(secondWork.snapshot.phase, 'work')
 })
 
 test('disable clears anti-pomodoro state back to normal', () => {
@@ -63,7 +80,8 @@ test('disable clears anti-pomodoro state back to normal', () => {
 
   const t0 = Date.UTC(2026, 0, 1, 8, 0, 0)
   antiPomodoro.enableAntiPomodoro(t0)
-  antiPomodoro.queueDelayedReply('conv-a', 'done', t0 + antiPomodoro.ANTI_POMODORO_WORK_MS + 1000)
+  antiPomodoro.startWorkPhaseIfWaiting(t0 + 1000)
+  antiPomodoro.queueDelayedReply('conv-a', 'done', t0 + 1000 + antiPomodoro.ANTI_POMODORO_WORK_MS + 1000)
 
   const disabled = antiPomodoro.disableAntiPomodoro('已回到电脑端工作。', t0 + 2000)
   assert.equal(disabled.changed, true)
@@ -80,11 +98,12 @@ test('anti-pomodoro daemon sync keeps delayed replies on send failure and retrie
 
   const t0 = Date.UTC(2026, 0, 1, 12, 0, 0)
   antiPomodoro.enableAntiPomodoro(t0)
+  antiPomodoro.startWorkPhaseIfWaiting(t0 + 1000)
 
-  const restAt = t0 + antiPomodoro.ANTI_POMODORO_WORK_MS + 1000
+  const restAt = t0 + 1000 + antiPomodoro.ANTI_POMODORO_WORK_MS + 1000
   antiPomodoro.queueDelayedReply('conv-a', 'done', restAt)
 
-  const nextWorkAt = restAt + antiPomodoro.ANTI_POMODORO_REST_MS + 1000
+  const waitingAt = restAt + antiPomodoro.ANTI_POMODORO_REST_MS + 1000
   const realDateNow = Date.now
   let attempts = 0
   const controller = new antiPomodoro.AntiPomodoroDaemonController(async () => {
@@ -92,7 +111,7 @@ test('anti-pomodoro daemon sync keeps delayed replies on send failure and retrie
     if (attempts === 1) throw new Error('network down')
   })
 
-  Date.now = () => nextWorkAt
+  Date.now = () => waitingAt
 
   try {
     await controller.sync()
