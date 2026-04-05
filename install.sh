@@ -101,7 +101,8 @@ fi
 
 # --- 3. 配置 shell 命令 ---
 # shell 函数是薄包装（<20 行），所有逻辑在 im2cc CLI 中。
-# 直接写入 .zshrc/.bashrc，不依赖 source 外部文件，避免版本不同步。
+# 为兼容历史安装，既刷新 ~/.local/bin/im2cc-shell-functions.zsh，
+# 也保留向 .zshrc/.bashrc 写入薄包装函数的能力。
 SHELL_RC=""
 CURRENT_SHELL="${SHELL:-}"
 CURRENT_ZSH_VERSION="${ZSH_VERSION:-}"
@@ -125,6 +126,10 @@ fs()       { im2cc show "$@"; }
 fqon()     { im2cc fqon "$@"; }
 fqoff()    { im2cc fqoff "$@"; }
 fqs()      { im2cc fqs "$@"; }'
+
+mkdir -p "$HOME/.local/bin"
+cp "$(cd "$(dirname "$0")" && pwd)/shell/im2cc-shell-functions.zsh" "$HOME/.local/bin/im2cc-shell-functions.zsh"
+ok "已刷新 ~/.local/bin/im2cc-shell-functions.zsh"
 
 if [ -n "$SHELL_RC" ]; then
   if grep -q "im2cc new" "$SHELL_RC" 2>/dev/null \

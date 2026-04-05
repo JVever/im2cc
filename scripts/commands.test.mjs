@@ -53,7 +53,7 @@ test('help and mode list surface aliases for mobile input', async () => {
   const helpOutput = await commands.handleCommand(helpCmd, 'conv-help', config)
   assert.match(helpOutput, /首次使用：先在电脑终端运行 fn <名称>/)
   assert.match(helpOutput, /fhelp\s+— 查看帮助/)
-  assert.match(helpOutput, /im2cc upgrade\s+— 升级到最新版本/)
+  assert.match(helpOutput, /im2cc update\s+— 更新到最新版本/)
   assert.match(helpOutput, /fn <名称>\s+— 用当前目录创建对话/)
   assert.match(helpOutput, /fn-codex <名称>/)
   assert.match(helpOutput, /fn-gemini <名称>/)

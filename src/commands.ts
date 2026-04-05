@@ -670,7 +670,7 @@ export function renderUnifiedHelp(): string {
     '电脑终端：',
     'fhelp                    — 查看帮助',
     'im2cc onboard            — 查看首次安装引导',
-    'im2cc upgrade            — 升级到最新版本',
+    'im2cc update             — 更新到最新版本',
     'fn <名称>                — 用当前目录创建对话',
     'fn-codex <名称>          — 用当前目录创建 Codex 对话',
     'fn-gemini <名称>         — 用当前目录创建 Gemini 对话',

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * @input:    CLI 参数 (start/stop/status/logs/sessions/new/connect/list/delete/detach/show/setup/secure/onboard/install-service/doctor/help/upgrade/wechat/fqon/fqoff/fqs)
+ * @input:    CLI 参数 (start/stop/status/logs/sessions/new/connect/list/delete/detach/show/setup/secure/onboard/install-service/doctor/help/update/wechat/fqon/fqoff/fqs)
  * @output:   守护进程管理 + 完整 session 管理命令（new/connect/list/delete/detach/show；connect 含桌面接回保护态，list 输出按对话位置聚合）
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
@@ -106,16 +106,16 @@ function ensureCleanGitCheckout(root: string): void {
   }).trim()
 
   if (status) {
-    console.log('❌ 当前安装目录有未提交改动，已停止自动升级。')
-    console.log('请先提交、暂存或清理这些改动后再运行 im2cc upgrade。')
+    console.log('❌ 当前安装目录有未提交改动，已停止自动更新。')
+    console.log('请先提交、暂存或清理这些改动后再运行 im2cc update。')
     process.exit(1)
   }
 }
 
 function upgradeFromPublicArchive(root: string): void {
   if (!commandExists('curl') || !commandExists('tar')) {
-    console.log('❌ 当前安装不含 .git，需要用公开源码包升级，但本机缺少 curl 或 tar。')
-    console.log('请先安装 curl 与 tar，或重新用 git clone 安装后再升级。')
+    console.log('❌ 当前安装不含 .git，需要用公开源码包更新，但本机缺少 curl 或 tar。')
+    console.log('请先安装 curl 与 tar，或重新用 git clone 安装后再更新。')
     process.exit(1)
   }
 
@@ -125,7 +125,7 @@ function upgradeFromPublicArchive(root: string): void {
   fs.mkdirSync(extractDir, { recursive: true })
 
   try {
-    console.log('当前安装目录不含 .git，改用公开源码包升级...')
+    console.log('当前安装目录不含 .git，改用公开源码包更新...')
     execFileSync('curl', ['-L', PUBLIC_ARCHIVE_URL, '-o', archivePath], { stdio: 'inherit' })
     execFileSync('tar', ['-xzf', archivePath, '-C', extractDir], { stdio: 'inherit' })
 
@@ -140,14 +140,14 @@ function upgradeFromPublicArchive(root: string): void {
       fs.cpSync(path.join(extractedRoot, entry), path.join(root, entry), { recursive: true, force: true })
     }
   } catch (err) {
-    console.log(`❌ 公开源码包升级失败: ${err instanceof Error ? err.message : String(err)}`)
+    console.log(`❌ 公开源码包更新失败: ${err instanceof Error ? err.message : String(err)}`)
     process.exit(1)
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true })
   }
 }
 
-async function cmdUpgrade(): Promise<void> {
+async function cmdUpdate(): Promise<void> {
   const installRoot = currentInstallRoot()
   if (!installRoot) {
     console.log('❌ 无法定位 im2cc 安装目录。请进入仓库目录后重试。')
@@ -157,12 +157,12 @@ async function cmdUpgrade(): Promise<void> {
   const daemonStateBefore = inspectLocalDaemonState()
   const shouldRestartDaemon = daemonStateBefore.kind === 'running' || daemonStateBefore.kind === 'starting'
 
-  console.log(`开始升级 im2cc (${installRoot.root})`)
+  console.log(`开始更新 im2cc (${installRoot.root})`)
 
   try {
     if (installRoot.isGitCheckout) {
       if (!commandExists('git')) {
-        console.log('❌ 当前安装目录包含 .git，但本机未安装 git。请先安装 git 后再升级。')
+        console.log('❌ 当前安装目录包含 .git，但本机未安装 git。请先安装 git 后再更新。')
         process.exit(1)
       }
       ensureCleanGitCheckout(installRoot.root)
@@ -183,11 +183,11 @@ async function cmdUpgrade(): Promise<void> {
       console.log('守护进程当前未运行，本次不自动启动。')
     }
   } catch (err) {
-    console.log(`❌ 升级失败: ${err instanceof Error ? err.message : String(err)}`)
+    console.log(`❌ 更新失败: ${err instanceof Error ? err.message : String(err)}`)
     process.exit(1)
   }
 
-  console.log('✅ 升级完成')
+  console.log('✅ 更新完成')
   console.log('终端帮助: im2cc help（或重新打开终端后使用 fhelp）')
 }
 
@@ -211,7 +211,8 @@ switch (command) {
   case 'doctor': cmdDoctor(); break
   case 'help': cmdHelp(); break
   case 'fhelp': cmdHelp(); break
-  case 'upgrade': await cmdUpgrade(); break
+  case 'update': await cmdUpdate(); break
+  case 'upgrade': await cmdUpdate(); break
   case 'wechat': await cmdWeChat(); break
   case 'fqon': cmdFqOn(); break
   case 'fqoff': cmdFqOff(); break
@@ -257,7 +258,7 @@ switch (command) {
   fqs                查看反茄钟状态
   help               查看统一帮助
   fhelp              查看统一帮助（help 的别名）
-  upgrade            升级到最新版本
+  update             更新到最新版本
 `)
 }
 
