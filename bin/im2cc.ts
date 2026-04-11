@@ -369,15 +369,32 @@ async function releaseRemoteBinding(
     try {
       const config = loadConfig()
       const lark = await import('@larksuiteoapi/node-sdk')
+      const sendHandoffNotice = async (client: InstanceType<typeof lark.Client>): Promise<void> => {
+        await client.im.message.create({
+          params: { receive_id_type: 'chat_id' },
+          data: {
+            receive_id: remoteBinding.conversationId,
+            msg_type: 'text',
+            content: JSON.stringify({ text: handoffText }),
+          },
+        })
+      }
       const client = new lark.Client({ appId: config.feishu.appId, appSecret: config.feishu.appSecret })
-      await client.im.message.create({
-        params: { receive_id_type: 'chat_id' },
-        data: {
-          receive_id: remoteBinding.conversationId,
-          msg_type: 'text',
-          content: JSON.stringify({ text: handoffText }),
-        },
-      })
+      try {
+        await sendHandoffNotice(client)
+      } catch (err) {
+        const maybeDnsError = err && typeof err === 'object'
+          && ((err as { code?: string }).code === 'ENOTFOUND'
+            || (err as { message?: string }).message?.includes('ENOTFOUND open.feishu.cn') === true)
+        if (!maybeDnsError) throw err
+
+        const fallbackClient = new lark.Client({
+          appId: config.feishu.appId,
+          appSecret: config.feishu.appSecret,
+          domain: lark.Domain.Lark,
+        })
+        await sendHandoffNotice(fallbackClient)
+      }
     } catch { /* 通知失败不影响主流程 */ }
   }
 

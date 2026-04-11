@@ -28,7 +28,7 @@ im2cc 核心业务逻辑：IM 消息接收 → 命令路由 → 本地 AI coding
 - registry.ts：命名 session 注册表（register/lookup/list/remove，永久寻址）
 - discover.ts：扫描本地 Claude Code 对话，并处理 Claude/Codex 的 session 漂移同步（Codex 会尝试匹配 tmux pane 可见内容到真实 thread）
 - recap.ts：上下文回顾（过滤 init 消息、格式化最近一轮对话、/fc 时按最多 3 条消息发送）
-- feishu.ts：飞书 REST 轮询适配器（定时拉取群消息、文本/富文本发送、资源下载）
+- feishu.ts：飞书 REST 轮询适配器（定时拉取群消息、文本/富文本发送、资源下载，并在 `open.feishu.cn` DNS 失败时自动回退到 `open.larksuite.com`）
 - wechat.ts：微信 ClawBot iLink 适配器（文本长轮询、结构化消息文本降级发送、绑定）
 - poll-cursor.ts：轮询游标持久化（per-group 游标读写，原子文件操作）
 - file-staging.ts：文件暂存管理（inbox 目录、格式校验、TTL 清理、暂存队列）

@@ -46,6 +46,33 @@ test('FeishuAdapter recreates client after timeout errors', async () => {
   assert.equal(adapter.client, replacementClient)
 })
 
+test('FeishuAdapter falls back to Lark domain after Feishu DNS failure', async () => {
+  const adapter = new FeishuAdapter(makeConfig())
+  const replacementClient = { marker: 'lark-client' }
+  let rebuilds = 0
+  let calls = 0
+
+  adapter.createClient = () => {
+    rebuilds++
+    return replacementClient
+  }
+
+  const result = await adapter.runRequest('拉取群列表', async () => {
+    calls++
+    if (calls === 1) {
+      throw Object.assign(new Error('getaddrinfo ENOTFOUND open.feishu.cn'), {
+        code: 'ENOTFOUND',
+      })
+    }
+    return { ok: true }
+  })
+
+  assert.deepEqual(result, { ok: true })
+  assert.equal(calls, 2)
+  assert.equal(rebuilds, 1)
+  assert.equal(adapter.client, replacementClient)
+})
+
 test('FeishuAdapter does not recreate client for non-timeout errors', async () => {
   const adapter = new FeishuAdapter(makeConfig())
   const originalClient = adapter.client

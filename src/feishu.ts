@@ -18,10 +18,12 @@ import { buildFeishuMessage } from './message-format.js'
 interface BotChat { chatId: string }
 
 const FEISHU_REQUEST_TIMEOUT_MS = 15_000
+type FeishuDomainTarget = 'feishu' | 'lark'
 
 export class FeishuAdapter implements TransportAdapter {
   readonly type = 'feishu' as const
   private client: lark.Client
+  private domainTarget: FeishuDomainTarget = 'feishu'
   private cachedChats: BotChat[] = []
   private chatsCachedAt = 0
   private readonly CHAT_CACHE_TTL = 5 * 60 * 1000
@@ -184,6 +186,7 @@ export class FeishuAdapter implements TransportAdapter {
       appId: this.config.feishu.appId,
       appSecret: this.config.feishu.appSecret,
       appType: lark.AppType.SelfBuild,
+      domain: this.domainTarget === 'lark' ? lark.Domain.Lark : lark.Domain.Feishu,
       httpInstance,
     })
   }
@@ -195,6 +198,13 @@ export class FeishuAdapter implements TransportAdapter {
       || candidate.message?.includes(`timeout of ${FEISHU_REQUEST_TIMEOUT_MS}ms exceeded`) === true
   }
 
+  private isFeishuDnsError(err: unknown): boolean {
+    if (!err || typeof err !== 'object') return false
+    const candidate = err as { code?: string, message?: string }
+    return candidate.code === 'ENOTFOUND'
+      || candidate.message?.includes('ENOTFOUND open.feishu.cn') === true
+  }
+
   private async runRequest<T>(label: string, fn: () => Promise<T>): Promise<T> {
     try {
       return await fn()
@@ -202,6 +212,11 @@ export class FeishuAdapter implements TransportAdapter {
       if (this.isTimeoutError(err)) {
         error(`[feishu] ${label} 超时 (${FEISHU_REQUEST_TIMEOUT_MS}ms)，重建客户端`)
         this.client = this.createClient()
+      } else if (this.domainTarget === 'feishu' && this.isFeishuDnsError(err)) {
+        error(`[feishu] ${label} 解析 open.feishu.cn 失败，切换到 open.larksuite.com 重试`)
+        this.domainTarget = 'lark'
+        this.client = this.createClient()
+        return await fn()
       }
       throw err
     }
