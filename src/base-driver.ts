@@ -211,8 +211,17 @@ export abstract class BaseToolDriver implements ToolDriver {
 
 function waitOrTimeout(child: ChildProcess, ms: number): Promise<void> {
   return new Promise(resolve => {
-    const timer = setTimeout(resolve, ms)
-    child.on('close', () => { clearTimeout(timer); resolve() })
+    if (child.exitCode !== null) return resolve()
+    const onClose = (): void => {
+      clearTimeout(timer)
+      resolve()
+    }
+    const timer = setTimeout(() => {
+      // 超时时主动卸载 listener，避免 interrupt() 连续 3 次调用 waitOrTimeout 累积 close 监听器
+      child.removeListener('close', onClose)
+      resolve()
+    }, ms)
+    child.once('close', onClose)
   })
 }
 

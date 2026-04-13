@@ -395,7 +395,12 @@ async function releaseRemoteBinding(
         })
         await sendHandoffNotice(fallbackClient)
       }
-    } catch { /* 通知失败不影响主流程 */ }
+    } catch (err) {
+      // 通知失败不影响主流程，但要记录原因供排查（之前空 catch 完全吞错）
+      const code = (err as { code?: string })?.code
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error(`[handoff] 飞书接回通知发送失败${code ? ` (${code})` : ''}: ${msg}`)
+    }
   }
 
   const suffix = shouldInterrupt
