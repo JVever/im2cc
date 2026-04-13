@@ -12,7 +12,7 @@ import { createBinding, getBinding, archiveBinding, archiveBindingsBySession, up
 import { getDriver, hasDriver, type ToolId } from './tool-driver.js'
 import { handleStop, getQueueStatus } from './queue.js'
 import { discoverSessions, findSession, syncDriftedSession } from './discover.js'
-import { register, lookup, lookupBySessionId, search, listRegistered, touch, remove, updateRegistry } from './registry.js'
+import { register, registerWithMeta, lookup, lookupBySessionId, search, listRegistered, touch, remove, updateRegistry } from './registry.js'
 import { buildSessionStatus } from './status.js'
 import { log } from './logger.js'
 import { isBestEffortTool, supportedToolChoices, supportedToolList } from './support-policy.js'
@@ -152,7 +152,8 @@ async function handleFn(args: string, conversationId: string, config: Im2ccConfi
     const defaultMode = getDefaultMode(tool, config)
     const { sessionId } = await driver.createSession(validation.resolvedPath, defaultMode, sessionName)
 
-    register(sessionName, sessionId, validation.resolvedPath, tool)
+    // 持久化 permissionMode 到 registry（P1-1 修复 /mode 丢失）
+    registerWithMeta(sessionName, sessionId, validation.resolvedPath, tool, { permissionMode: defaultMode })
 
     const binding = createBinding(conversationId, sessionId, validation.resolvedPath, defaultMode, cliVersion, transport, tool)
     const supportNote = isBestEffortTool(tool) ? '\n⚠️ Gemini 为 best-effort 支持' : ''
@@ -288,27 +289,29 @@ async function connectToRegistered(
   if (!pathCheck.ok) return pathCheck.message
   reg = { ...reg, cwd: pathCheck.resolvedPath }
 
+  // 先计算出最终 mode，确保后续 register 调用能把它持久化到 registry
+  const mode = reg.permissionMode
+    ? migrateLegacyMode(reg.permissionMode, tool)
+    : getDefaultMode(tool, config)
+
   // 断开前同步：在 killLocalSession 之前检查 session 是否漂移
   if (tool === 'claude' || tool === 'codex') {
     const allNames = listRegistered()
     const synced = syncDriftedSession(reg.name, reg.sessionId, reg.cwd, allNames, tool)
     if (synced) {
       log(`[${conversationId}] pre-disconnect sync: ${reg.name} ${reg.sessionId.slice(0, 8)} → ${synced.slice(0, 8)}`)
-      register(reg.name, synced, reg.cwd, tool)
+      registerWithMeta(reg.name, synced, reg.cwd, tool, { permissionMode: mode })
       reg = { ...reg, sessionId: synced }
     }
   }
 
-  register(reg.name, reg.sessionId, reg.cwd, tool)
+  registerWithMeta(reg.name, reg.sessionId, reg.cwd, tool, { permissionMode: mode })
 
   const killed = getDriver(tool).killLocalSession(reg.name, tool)
   archiveBindingsBySession(reg.sessionId, conversationId)
   const driver = getDriver(tool)
   const cliVersion = driver.getVersion()
   touch(reg.name)
-  const mode = reg.permissionMode
-    ? migrateLegacyMode(reg.permissionMode, tool)
-    : getDefaultMode(tool, config)
   const binding = createBinding(conversationId, reg.sessionId, reg.cwd, mode, cliVersion, transport, tool)
   log(`[${conversationId}] attach → "${reg.name}" (${reg.sessionId})${killed ? ' [已关闭本地进程]' : ''}`)
 
@@ -333,7 +336,7 @@ async function connectToDiscovered(
   archiveBindingsBySession(session.sessionId, conversationId)
   const defaultMode = getDefaultMode('claude', config)
   const binding = createBinding(conversationId, session.sessionId, pathCheck.resolvedPath, defaultMode, cliVersion, transport, 'claude')
-  register(name, session.sessionId, pathCheck.resolvedPath, 'claude')
+  registerWithMeta(name, session.sessionId, pathCheck.resolvedPath, 'claude', { permissionMode: defaultMode })
   log(`[${conversationId}] attach (discovered) → "${name}" (${session.sessionId})`)
 
   const status = await buildSessionStatus(binding)
@@ -461,8 +464,12 @@ function handleMode(args: string, conversationId: string, config: Im2ccConfig): 
   }
 
   updateBinding(conversationId, { permissionMode: resolved })
-  if (regEntry) {
-    updateRegistry(regEntry.name, { permissionMode: resolved })
+  // regEntry 正常应该有（上面已按 sessionId 查过）；null 时作为兜底再按 sessionId 反查一次
+  const targetReg = regEntry ?? listRegistered().find(r => r.sessionId === binding.sessionId)
+  if (targetReg) {
+    updateRegistry(targetReg.name, { permissionMode: resolved })
+  } else {
+    log(`[mode] session ${binding.sessionId.slice(0, 8)} 未在 registry 中，模式仅保存到 binding`)
   }
 
   const modeInfo = modes.find(m => m.id === resolved)

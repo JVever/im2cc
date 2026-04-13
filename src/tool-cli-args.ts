@@ -7,9 +7,21 @@
 import type { ToolId } from './tool-driver.js'
 import { claudeSessionNameArgs } from './tool-compat.js'
 import { buildClaudeInteractiveCommand } from './claude-launcher.js'
+import { getModeCliArgs, migrateLegacyMode } from './mode-policy.js'
 
 interface ToolCliArgsOptions {
   claudeProfile?: string
+  /**
+   * 权限模式。传入则按 mode 派生 CLI flag；
+   * 省略时保留历史默认 `--dangerously-skip-permissions`（向后兼容本地 im2cc new/connect 默认行为）。
+   */
+  permissionMode?: string
+}
+
+function claudePermissionArgs(mode: string | undefined): string[] {
+  if (!mode) return ['--dangerously-skip-permissions']
+  const native = migrateLegacyMode(mode, 'claude')
+  return getModeCliArgs('claude', native)
 }
 
 export function resumeCommand(tool: ToolId, sessionId: string): string {
@@ -29,7 +41,7 @@ export function toolCreateArgs(tool: ToolId, sessionId: string, name: string, op
   switch (tool) {
     case 'claude':
       return buildClaudeInteractiveCommand(
-        ['--session-id', sessionId, '--dangerously-skip-permissions', ...claudeSessionNameArgs(name)],
+        ['--session-id', sessionId, ...claudePermissionArgs(opts.permissionMode), ...claudeSessionNameArgs(name)],
         { phase: 'create', sessionId, sessionName: name, profile: opts.claudeProfile },
       )
     case 'codex': return ['codex']
@@ -45,7 +57,7 @@ export function toolResumeArgs(tool: ToolId, sessionId: string, name: string, op
   switch (tool) {
     case 'claude':
       return buildClaudeInteractiveCommand(
-        ['--resume', sessionId, '--dangerously-skip-permissions', ...claudeSessionNameArgs(name)],
+        ['--resume', sessionId, ...claudePermissionArgs(opts.permissionMode), ...claudeSessionNameArgs(name)],
         { phase: 'resume', sessionId, sessionName: name, profile: opts.claudeProfile },
       )
     case 'codex': return ['codex', 'resume', sessionId]

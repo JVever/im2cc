@@ -23,6 +23,54 @@ export interface DiscoveredSession {
 
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects')
 
+/** 只读文件首行（不超过 64KB），用于解析 session_meta 等首行元数据 */
+function readFirstLineSync(filePath: string): string | null {
+  const MAX_BYTES = 64 * 1024
+  let fd = -1
+  try {
+    fd = fs.openSync(filePath, 'r')
+    const stat = fs.fstatSync(fd)
+    const readBytes = Math.min(stat.size, MAX_BYTES)
+    if (readBytes === 0) return null
+    const buf = Buffer.alloc(readBytes)
+    fs.readSync(fd, buf, 0, readBytes, 0)
+    const text = buf.toString('utf-8')
+    const idx = text.indexOf('\n')
+    return idx >= 0 ? text.slice(0, idx) : text
+  } catch {
+    return null
+  } finally {
+    if (fd >= 0) {
+      try { fs.closeSync(fd) } catch { /* 忽略 */ }
+    }
+  }
+}
+
+/** 只读文件尾部 windowBytes 字节并按 \n 拆分；首行可能不完整时丢弃 */
+function readTailLinesSync(filePath: string, windowBytes: number): string[] {
+  let fd = -1
+  try {
+    fd = fs.openSync(filePath, 'r')
+    const stat = fs.fstatSync(fd)
+    const readBytes = Math.min(stat.size, windowBytes)
+    if (readBytes === 0) return []
+    const buf = Buffer.alloc(readBytes)
+    const start = stat.size - readBytes
+    fs.readSync(fd, buf, 0, readBytes, start)
+    const text = buf.toString('utf-8')
+    const allLines = text.split('\n')
+    // 起点不在文件开头时，首行可能从中间截断，丢弃
+    const lines = start > 0 ? allLines.slice(1) : allLines
+    return lines.filter(l => l.trim().length > 0)
+  } catch {
+    return []
+  } finally {
+    if (fd >= 0) {
+      try { fs.closeSync(fd) } catch { /* 忽略 */ }
+    }
+  }
+}
+
 /** 从 project slug 还原项目绝对路径 */
 function slugToPath(slug: string): string | null {
   // slug 格式: -Users-jvever-Code-16-------
@@ -75,19 +123,20 @@ function findMatchingPath(basePath: string, targetSlug: string): string | null {
 /** 从 JSONL 头尾提取 session 元信息 */
 async function parseSessionMeta(
   filePath: string,
-): Promise<{ name: string; firstMessage: string }> {
+): Promise<{ name: string; firstMessage: string; cwd: string }> {
   let name = ''
   let firstMessage = ''
+  let cwd = ''
 
   const stream = fs.createReadStream(filePath, { encoding: 'utf-8' })
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity })
 
   let lineCount = 0
-  const MAX_LINES = 100 // 头部读 100 行找 title 和首条消息
+  const MAX_LINES = 100 // 头部读 100 行找 title、首条消息、cwd
 
   for await (const line of rl) {
     lineCount++
-    if (lineCount > MAX_LINES && firstMessage) break
+    if (lineCount > MAX_LINES && firstMessage && cwd) break
 
     try {
       const obj = JSON.parse(line) as Record<string, unknown>
@@ -98,6 +147,11 @@ async function parseSessionMeta(
       }
       if (obj.type === 'agent-name' && typeof obj.agentName === 'string') {
         name = obj.agentName
+      }
+
+      // Claude/Codex JSONL 里会直接写 cwd，作为项目路径的权威来源（优先于 slug 反推）
+      if (!cwd && typeof obj.cwd === 'string' && obj.cwd) {
+        cwd = obj.cwd
       }
 
       // 找首条真实 user 消息（跳过 meta/系统消息）
@@ -129,25 +183,26 @@ async function parseSessionMeta(
     name = await scanForName(filePath)
   }
 
-  return { name, firstMessage }
+  return { name, firstMessage, cwd }
 }
 
-/** 快速扫描文件找最后一个 custom-title 或 agent-name */
+/** 快速扫描文件找最后一个 custom-title 或 agent-name（流式读，避免整文件 readFileSync 阻塞事件循环） */
 async function scanForName(filePath: string): Promise<string> {
   let lastName = ''
   try {
-    const content = fs.readFileSync(filePath, 'utf-8')
-    // 只处理包含 custom-title 或 agent-name 的行
-    const lines = content.split('\n')
-    for (const line of lines) {
-      if (line.includes('"custom-title"') || line.includes('"agent-name"')) {
-        try {
-          const obj = JSON.parse(line) as Record<string, unknown>
-          if (obj.type === 'custom-title' && typeof obj.customTitle === 'string') lastName = obj.customTitle
-          if (obj.type === 'agent-name' && typeof obj.agentName === 'string') lastName = obj.agentName
-        } catch { /* 忽略 */ }
-      }
+    const stream = fs.createReadStream(filePath, { encoding: 'utf-8' })
+    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity })
+    for await (const line of rl) {
+      // 只解析包含特征字符串的行，跳过普通消息
+      if (!(line.includes('"custom-title"') || line.includes('"agent-name"'))) continue
+      try {
+        const obj = JSON.parse(line) as Record<string, unknown>
+        if (obj.type === 'custom-title' && typeof obj.customTitle === 'string') lastName = obj.customTitle
+        if (obj.type === 'agent-name' && typeof obj.agentName === 'string') lastName = obj.agentName
+      } catch { /* 忽略非 JSON 行 */ }
     }
+    rl.close()
+    stream.destroy()
   } catch { /* 读取失败 */ }
   return lastName
 }
@@ -187,10 +242,11 @@ export async function discoverSessions(limit: number = 15): Promise<DiscoveredSe
   const sessions: DiscoveredSession[] = []
 
   for (const entry of topFiles) {
-    const projectPath = slugToPath(entry.slug)
-    if (!projectPath) continue // 无法还原路径，跳过
-
     const meta = await parseSessionMeta(entry.filePath)
+
+    // 优先使用 JSONL 元数据里的 cwd 作为权威路径（slug 反推是有损的，例如路径含中文或连字符）
+    const projectPath = meta.cwd || slugToPath(entry.slug)
+    if (!projectPath) continue // 既没有 cwd 元数据又无法从 slug 还原，跳过
 
     sessions.push({
       sessionId: entry.sessionId,
@@ -291,18 +347,32 @@ export function syncDriftedSession(
   return null
 }
 
-/** 检查 session 文件头部是否包含 im2cc:<name> 标题 */
+/** 检查 session 文件头部是否包含 im2cc:<name> 标题（结构化 JSON 解析，避免 JSON 空格/字段顺序差异导致漏匹配） */
 function checkSessionTitle(filePath: string, name: string): boolean {
+  let fd = -1
   try {
     // 只读头部（前 50KB 足以覆盖 title 行）
-    const fd = fs.openSync(filePath, 'r')
+    fd = fs.openSync(filePath, 'r')
     const buf = Buffer.alloc(50 * 1024)
     const bytesRead = fs.readSync(fd, buf, 0, buf.length, 0)
-    fs.closeSync(fd)
     const head = buf.toString('utf-8', 0, bytesRead)
     const target = `im2cc:${name}`
-    return head.includes(`"customTitle":"${target}"`) || head.includes(`"agentName":"${target}"`)
-  } catch { return false }
+    // 按行 JSON.parse：只对含特征字符串的行解析，避免全文件 parse 开销
+    for (const line of head.split('\n')) {
+      if (!(line.includes('customTitle') || line.includes('agentName'))) continue
+      try {
+        const obj = JSON.parse(line) as Record<string, unknown>
+        if (obj.customTitle === target || obj.agentName === target) return true
+      } catch { /* 残行/非 JSON 跳过 */ }
+    }
+    return false
+  } catch {
+    return false
+  } finally {
+    if (fd >= 0) {
+      try { fs.closeSync(fd) } catch { /* 忽略 */ }
+    }
+  }
 }
 
 interface CodexSessionCandidate {
@@ -406,7 +476,9 @@ function listRecentCodexCandidates(cwd: string, limit: number): CodexSessionCand
       }
       if (!entry.name.endsWith('.jsonl')) continue
       try {
-        const firstLine = fs.readFileSync(full, 'utf-8').split('\n')[0]
+        // 只读首行（session_meta），不要 readFileSync 整文件——文件可能 100MB+
+        const firstLine = readFirstLineSync(full)
+        if (!firstLine) continue
         const meta = JSON.parse(firstLine) as Record<string, unknown>
         if (meta.type !== 'session_meta') continue
         const payload = meta.payload as Record<string, unknown> | undefined
@@ -432,15 +504,8 @@ function findMostRecentCodexSessionByCwd(cwd: string): string | null {
 }
 
 function extractRecentCodexTexts(filePath: string): string[] {
-  const lines: string[] = []
-  try {
-    const content = fs.readFileSync(filePath, 'utf-8').split('\n')
-    for (const line of content) {
-      if (line.trim()) lines.push(line)
-    }
-  } catch {
-    return []
-  }
+  // 只读文件尾部窗口（默认 256KB），避免大 session（>100MB）整文件读阻塞 + 耗内存
+  const lines = readTailLinesSync(filePath, 256 * 1024)
 
   const texts: string[] = []
   for (const line of lines.slice(-160)) {

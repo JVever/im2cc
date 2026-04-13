@@ -77,7 +77,8 @@ export class CodexDriver extends BaseToolDriver {
     }
 
     try {
-      const content = fs.readFileSync(targetFile, 'utf-8')
+      // 只读文件尾部 512KB（recap 只需要最后一个对话轮次，整文件读会阻塞 + 耗内存）
+      const content = readCodexTailContent(targetFile, 512 * 1024)
       const turns = extractCodexTurns(content)
       const meaningful = filterInitTurns(turns)
       if (meaningful.length === 0) return null
@@ -94,6 +95,31 @@ registerDriver(new CodexDriver())
 // --- Codex 专有 ---
 
 import { getModeCliArgs, migrateLegacyMode } from './mode-policy.js'
+
+/** 只读 Codex JSONL 文件尾部 N 字节，用于 recap 时取最近对话轮次 */
+function readCodexTailContent(filePath: string, windowBytes: number): string {
+  let fd = -1
+  try {
+    fd = fs.openSync(filePath, 'r')
+    const stat = fs.fstatSync(fd)
+    const readBytes = Math.min(stat.size, windowBytes)
+    if (readBytes === 0) return ''
+    const buf = Buffer.alloc(readBytes)
+    const start = stat.size - readBytes
+    fs.readSync(fd, buf, 0, readBytes, start)
+    const text = buf.toString('utf-8')
+    if (start === 0) return text
+    // 起点不在文件开头时，丢弃首行（可能从中间截断）
+    const newlineIdx = text.indexOf('\n')
+    return newlineIdx >= 0 ? text.slice(newlineIdx + 1) : ''
+  } catch {
+    return ''
+  } finally {
+    if (fd >= 0) {
+      try { fs.closeSync(fd) } catch { /* 忽略 */ }
+    }
+  }
+}
 
 function codexPermArgs(mode: string): string[] {
   const native = migrateLegacyMode(mode, 'codex')

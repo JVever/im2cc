@@ -822,10 +822,11 @@ async function cmdNew(): Promise<void> {
 
   try {
     const driver = getDriver(tool)
-    const result = await driver.createSession(validation.resolvedPath, config.defaultPermissionMode ?? 'default', name, { claudeProfile })
+    const permissionMode = config.defaultPermissionMode ?? 'default'
+    const result = await driver.createSession(validation.resolvedPath, permissionMode, name, { claudeProfile })
     const sessionId = result.sessionId
 
-    registerWithMeta(name, sessionId, validation.resolvedPath, tool, { claudeProfile })
+    registerWithMeta(name, sessionId, validation.resolvedPath, tool, { claudeProfile, permissionMode })
 
     // 在 tmux 中启动交互式工具
     const tmuxSession = `im2cc-${tool}-${name}`
@@ -839,7 +840,7 @@ async function cmdNew(): Promise<void> {
     }
 
     try {
-      const tmuxArgs = toolResumeArgs(tool, sessionId, name, { claudeProfile })
+      const tmuxArgs = toolResumeArgs(tool, sessionId, name, { claudeProfile, permissionMode })
       execFileSync('tmux', [
         'new-session', '-d', '-s', tmuxSession, '-c', validation.resolvedPath,
         ...tmuxArgs,
@@ -853,7 +854,7 @@ async function cmdNew(): Promise<void> {
       // tmux 不可用，直接启动
       console.log(`✅ 已创建 "${name}"`)
       console.log(`   打开: im2cc connect ${name}`)
-      const tmuxArgs = toolResumeArgs(tool, sessionId, name, { claudeProfile })
+      const tmuxArgs = toolResumeArgs(tool, sessionId, name, { claudeProfile, permissionMode })
       execFileSync(tmuxArgs[0], tmuxArgs.slice(1), { stdio: 'inherit', cwd: validation.resolvedPath })
     }
   } catch (err) {
@@ -975,9 +976,11 @@ async function cmdConnect(): Promise<void> {
   }
 
   const tmuxSession = `im2cc-${tool}-${session.name}`
+  // 从 registry 读 permissionMode；保持 mode 一致（IM 端切过的 mode 在电脑端也生效）
+  const permissionMode = session.permissionMode
   const cmdArgs = status === 'here'
-    ? toolResumeArgs(tool as ToolId, session.sessionId, session.name, { claudeProfile: session.claudeProfile })
-    : toolCreateArgs(tool as ToolId, session.sessionId, session.name, { claudeProfile: session.claudeProfile })
+    ? toolResumeArgs(tool as ToolId, session.sessionId, session.name, { claudeProfile: session.claudeProfile, permissionMode })
+    : toolCreateArgs(tool as ToolId, session.sessionId, session.name, { claudeProfile: session.claudeProfile, permissionMode })
 
   console.log(`恢复 "${session.name}" → ${path.basename(session.cwd)}`)
 
@@ -1045,8 +1048,9 @@ async function cmdConnectDoubleArg(newName: string, query: string): Promise<void
     return
   }
 
-  // 注册
-  register(newName, sessionId, cwd, 'claude')
+  // 注册（带默认 mode，后续 IM 端 /mode 切换会更新）
+  const permissionMode = config.defaultPermissionMode ?? 'default'
+  registerWithMeta(newName, sessionId, cwd, 'claude', { permissionMode })
   console.log(`✅ 已注册 "${newName}" → ${path.basename(cwd)} [${sessionId.slice(0, 8)}]`)
 
   const autoDisable = disableAntiPomodoro('已回到电脑端工作，反茄钟自动关闭。')
@@ -1061,8 +1065,8 @@ async function cmdConnectDoubleArg(newName: string, query: string): Promise<void
   // 创建 tmux session
   const tmuxSession = `im2cc-claude-${newName}`
   const cmdArgs = fileStatus === 'here'
-    ? toolResumeArgs('claude', sessionId, newName)
-    : toolCreateArgs('claude', sessionId, newName)
+    ? toolResumeArgs('claude', sessionId, newName, { permissionMode })
+    : toolCreateArgs('claude', sessionId, newName, { permissionMode })
 
   try {
     execFileSync('tmux', [

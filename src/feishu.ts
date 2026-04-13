@@ -5,6 +5,7 @@
  */
 
 import fs from 'node:fs'
+import dns from 'node:dns/promises'
 import * as lark from '@larksuiteoapi/node-sdk'
 import axios from 'axios'
 import type { Im2ccConfig } from './config.js'
@@ -27,6 +28,11 @@ export class FeishuAdapter implements TransportAdapter {
   private cachedChats: BotChat[] = []
   private chatsCachedAt = 0
   private readonly CHAT_CACHE_TTL = 5 * 60 * 1000
+  // lark 域回切：低频后台 probe + 连续成功才切回，避免 DNS 间歇性故障下抖动
+  private feishuRecoveryTimer: NodeJS.Timeout | null = null
+  private feishuConsecutiveOk = 0
+  private readonly FEISHU_RECOVERY_INTERVAL_MS = 5 * 60 * 1000
+  private readonly FEISHU_RECOVERY_NEED_OK = 3
 
   constructor(private config: Im2ccConfig) {
     const { appId, appSecret } = config.feishu
@@ -216,6 +222,8 @@ export class FeishuAdapter implements TransportAdapter {
         error(`[feishu] ${label} 解析 open.feishu.cn 失败，切换到 open.larksuite.com 重试`)
         this.domainTarget = 'lark'
         this.client = this.createClient()
+        // 切到 lark 后启动后台 probe，DNS 恢复后能自动切回 feishu
+        this.startFeishuRecoveryProbe()
         // 重试在 catch 块内：失败不在外层 try 保护范围，必须独立兜底以记录上下文
         try {
           return await fn()
@@ -227,6 +235,42 @@ export class FeishuAdapter implements TransportAdapter {
       }
       throw err
     }
+  }
+
+  /**
+   * 启动 lark 域恢复探测（幂等）。每 5 分钟 DNS probe 一次 open.feishu.cn，
+   * 连续 3 次成功才切回 feishu 域，避免间歇性 DNS 故障导致频繁抖动。
+   */
+  private startFeishuRecoveryProbe(): void {
+    if (this.feishuRecoveryTimer) return
+    this.feishuRecoveryTimer = setInterval(async () => {
+      if (this.domainTarget === 'feishu') {
+        // 已经切回，停止 probe
+        if (this.feishuRecoveryTimer) {
+          clearInterval(this.feishuRecoveryTimer)
+          this.feishuRecoveryTimer = null
+        }
+        this.feishuConsecutiveOk = 0
+        return
+      }
+      try {
+        await dns.resolve('open.feishu.cn')
+        this.feishuConsecutiveOk++
+        if (this.feishuConsecutiveOk >= this.FEISHU_RECOVERY_NEED_OK) {
+          log(`[feishu] open.feishu.cn 已稳定恢复（连续 ${this.feishuConsecutiveOk} 次 DNS 成功），切回 feishu 域`)
+          this.domainTarget = 'feishu'
+          this.client = this.createClient()
+          this.feishuConsecutiveOk = 0
+          if (this.feishuRecoveryTimer) {
+            clearInterval(this.feishuRecoveryTimer)
+            this.feishuRecoveryTimer = null
+          }
+        }
+      } catch {
+        this.feishuConsecutiveOk = 0  // 任何一次失败重置计数
+      }
+    }, this.FEISHU_RECOVERY_INTERVAL_MS)
+    this.feishuRecoveryTimer.unref()
   }
 
   private async refreshBotGroups(): Promise<BotChat[]> {
