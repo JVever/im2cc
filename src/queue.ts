@@ -12,7 +12,7 @@ import { getDriver, getDefaultDriver } from './tool-driver.js'
 import { getBinding, updateBinding } from './session.js'
 import { getInflightDir, getPendingFile } from './config.js'
 import { formatOutput, formatError } from './output.js'
-import { log } from './logger.js'
+import { log, error } from './logger.js'
 
 type JobState = 'idle' | 'busy' | 'cancelling'
 
@@ -293,6 +293,25 @@ async function sendQueuedReplyIfAttached(msg: QueuedMessage, text: string): Prom
   await msg.sendReply(text)
 }
 
+/**
+ * 浮动 promise 的统一兜底：记录错误 + 重置 group state 防卡死。
+ * 用于 fire-and-forget 的 processNext()/handleStop() 调用。
+ */
+function catchProcessError(conversationId: string, label: string): (err: unknown) => void {
+  return (err: unknown) => {
+    const msg = err instanceof Error ? (err.stack ?? err.message) : String(err)
+    error(`[queue] ${label} 异常 [${conversationId}]: ${msg}`)
+    // 防止 group state 卡死：如果仍然 busy，重置为 idle
+    const g = groups.get(conversationId)
+    if (g && g.state !== 'idle') {
+      if (g.timeoutTimer) { clearTimeout(g.timeoutTimer); g.timeoutTimer = null }
+      g.currentChild = null
+      g.state = 'idle'
+      log(`[queue] ${conversationId} state 已被重置为 idle`)
+    }
+  }
+}
+
 /** 将普通消息入队 */
 export function enqueue(
   conversationId: string,
@@ -319,18 +338,26 @@ export function enqueue(
 
   // 通知用户排队状态
   if (group.state === 'busy') {
-    sendQueuedReplyIfAttached(entry, `⏳ 已收到，当前有任务执行中，排在第 ${group.queue.length} 位`).catch(() => {})
+    sendQueuedReplyIfAttached(entry, `⏳ 已收到，当前有任务执行中，排在第 ${group.queue.length} 位`)
+      .catch(err => error(`[queue] 排队提示发送失败 [${conversationId}]: ${err}`))
   }
 
   // 如果空闲，立即处理
   if (group.state === 'idle') {
     processNext(conversationId, sendReply, timeoutSeconds)
+      .catch(catchProcessError(conversationId, 'processNext(enqueue-idle)'))
   }
 
-  // 结果回传飞书（如果已经流式发送过了，result 为空，跳过）
+  // 结果回传 IM（如果已经流式发送过了，result 为空，跳过）
   promise.then(result => {
-    if (result) sendQueuedReplyIfAttached(entry, result).catch(() => {})
-  }).catch(err => sendQueuedReplyIfAttached(entry, formatError(err)).catch(() => {}))
+    if (result) {
+      sendQueuedReplyIfAttached(entry, result)
+        .catch(err => error(`[queue] 结果回传失败 [${conversationId}]: ${err}`))
+    }
+  }).catch(err => {
+    sendQueuedReplyIfAttached(entry, formatError(err))
+      .catch(sendErr => error(`[queue] 错误回传失败 [${conversationId}]: ${sendErr}`))
+  })
 }
 
 /** 处理队列中的下一条消息 */
@@ -352,6 +379,7 @@ async function processNext(
   if (!binding) {
     msg.reject(new Error('该群未接入对话，请先 /fc <名称> 或 /fn <名称>'))
     processNext(conversationId, sendReply, timeoutSeconds)
+      .catch(catchProcessError(conversationId, 'processNext(no-binding)'))
     return
   }
   msg.expectedSessionId = binding.sessionId
@@ -367,7 +395,9 @@ async function processNext(
   group.timeoutTimer = setTimeout(() => {
     if (group.state === 'busy' && group.currentChild) {
       log(`[${conversationId}] 执行超时 (${timeoutSeconds}s)，中断`)
+      // handleStop 是 async 裸调用：reject 会变成 unhandledRejection，必须接住
       handleStop(conversationId)
+        .catch(err => error(`[queue] handleStop 异常 [${conversationId}]: ${err}`))
       msg.reject(new Error(`执行超时 (${Math.floor(timeoutSeconds / 60)}分钟)，已中断`))
     }
   }, timeoutSeconds * 1000)
@@ -391,7 +421,8 @@ async function processNext(
         onTurnText: (text) => {
           // 每轮 assistant 文字就绪后立即发到 IM
           streamed = true
-          sendQueuedReplyIfAttached(msg, formatOutput(text, binding.sessionId, binding.transport, binding.tool)).catch(() => {})
+          sendQueuedReplyIfAttached(msg, formatOutput(text, binding.sessionId, binding.transport, binding.tool))
+            .catch(err => error(`[queue] 流式回复发送失败 [${conversationId}]: ${err}`))
         },
       },
     )
@@ -416,6 +447,7 @@ async function processNext(
     // 继续处理队列
     if (group.queue.length > 0) {
       processNext(conversationId, sendReply, timeoutSeconds)
+        .catch(catchProcessError(conversationId, 'processNext(drain)'))
     }
   }
 }

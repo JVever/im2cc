@@ -216,7 +216,14 @@ export class FeishuAdapter implements TransportAdapter {
         error(`[feishu] ${label} 解析 open.feishu.cn 失败，切换到 open.larksuite.com 重试`)
         this.domainTarget = 'lark'
         this.client = this.createClient()
-        return await fn()
+        // 重试在 catch 块内：失败不在外层 try 保护范围，必须独立兜底以记录上下文
+        try {
+          return await fn()
+        } catch (retryErr) {
+          const msg = retryErr instanceof Error ? retryErr.message : String(retryErr)
+          error(`[feishu] ${label} DNS 降级重试也失败 (lark 域): ${msg}`)
+          throw retryErr
+        }
       }
       throw err
     }

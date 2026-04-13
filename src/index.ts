@@ -1,6 +1,6 @@
 /**
  * @input:    Im2ccConfig, Transport adapters, AI coding tool CLIs, recap, file-staging
- * @output:   startDaemon(), shouldSendFcRecap() — 主入口：初始化各模块、守护进程单实例锁、启动 transport 轮询、消息路由、/fc 上下文回顾、文件暂存与合并、反茄钟闸门
+ * @output:   startDaemon(), shouldSendFcRecap() — 主入口：全局异常兜底、初始化各模块、守护进程单实例锁、启动 transport 轮询、消息路由、/fc 上下文回顾、文件暂存与合并、反茄钟闸门
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -192,7 +192,39 @@ function acquireLock(): boolean {
   return false
 }
 
+/**
+ * 全局异常兜底：Node.js 15+ 遇到未捕获的 promise rejection 会直接杀进程。
+ * 没有这两个处理器时，任何一条漏网的 rejection 都会导致 daemon 无日志退出。
+ *
+ * - unhandledRejection: 仅记录，不退出（避免和局部 catch 策略冲突）
+ * - uncaughtException:  V8 堆可能损坏，必须退出让 LaunchAgent 重启
+ */
+function installGlobalFatalHandlers(): void {
+  const fatalLog = (kind: string, payload: unknown) => {
+    const msg = payload instanceof Error
+      ? (payload.stack ?? payload.message)
+      : typeof payload === 'object' ? JSON.stringify(payload) : String(payload)
+    try {
+      error(`[fatal/${kind}] ${msg}`)
+    } catch {
+      // logger 失败的最后兜底
+      console.error(`[fatal/${kind}] ${msg}`)
+    }
+  }
+
+  process.on('unhandledRejection', (reason) => {
+    fatalLog('unhandledRejection', reason)
+  })
+
+  process.on('uncaughtException', (err) => {
+    fatalLog('uncaughtException', err)
+    // 1 秒后退出，给日志写入磁盘的时间；LaunchAgent 会自动重启
+    setTimeout(() => process.exit(1), 1000).unref()
+  })
+}
+
 export async function startDaemon(): Promise<void> {
+  installGlobalFatalHandlers()
   prepareDaemonProcessIdentity()
 
   if (!acquireLock()) {

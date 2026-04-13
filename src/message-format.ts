@@ -82,8 +82,10 @@ export function renderOutgoingMessageAsText(message: OutgoingMessage): string {
   return lines.join('\n').trim()
 }
 
+// 注：原实现字符类 `[*_~`\\[\\]()>#+|]` 中 `\\]` 被解析为「转义反斜杠 + `]` 关闭类」，
+// 导致 `( ) > # + |` 实际落在类外，不会被转义。用正确的 `\[` `\]` 转义 + 单次 replace。
 function escapeFeishuMd(text: string): string {
-  return text.replace(/\\/g, '\\\\').replace(/([*_~`\\[\\]()>#+|])/g, '\\$1')
+  return text.replace(/[\\*_~`\[\]()>#+|]/g, '\\$&')
 }
 
 function escapeInlineCode(text: string): string {
