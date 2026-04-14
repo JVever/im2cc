@@ -368,6 +368,15 @@ export class FeishuAdapter implements TransportAdapter {
       } catch { return null }
     }
 
+    // 富文本（post）消息会把图片和文字混在一起，我们暂不拆解，直接提示用户分条发
+    if (msgType === 'post') {
+      return {
+        ...base,
+        kind: 'unsupported',
+        text: '暂不支持图文混合消息。请先依次发送图片（可多张），再单独发送文字指令——系统会把所有图片一起交给 AI 处理。',
+      }
+    }
+
     return null
   }
 }

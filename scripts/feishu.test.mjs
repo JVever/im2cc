@@ -94,6 +94,48 @@ test('FeishuAdapter does not recreate client for non-timeout errors', async () =
   assert.equal(adapter.client, originalClient)
 })
 
+test('parseRestMessage 对 post 类型返回 unsupported 并附带中文提示', () => {
+  const adapter = new FeishuAdapter(makeConfig())
+  const msg = adapter.parseRestMessage({
+    message_id: 'om_post_001',
+    chat_id: 'oc_abc',
+    msg_type: 'post',
+    sender: { id: 'ou_user', sender_type: 'user' },
+    body: { content: JSON.stringify({ title: '', content: [[{ tag: 'text', text: 'hi' }]] }) },
+  })
+  assert.ok(msg)
+  assert.equal(msg.kind, 'unsupported')
+  assert.match(msg.text ?? '', /图文混合|暂不支持/)
+  // 保留原 messageId，方便 addReaction / 日志定位
+  assert.equal(msg.messageId, 'om_post_001')
+})
+
+test('parseRestMessage 对未知类型仍返回 null（不抛错）', () => {
+  const adapter = new FeishuAdapter(makeConfig())
+  const msg = adapter.parseRestMessage({
+    message_id: 'om_sticker_001',
+    chat_id: 'oc_abc',
+    msg_type: 'sticker',
+    sender: { id: 'ou_user', sender_type: 'user' },
+    body: { content: '{}' },
+  })
+  assert.equal(msg, null)
+})
+
+test('parseRestMessage 对 text 类型正常解析', () => {
+  const adapter = new FeishuAdapter(makeConfig())
+  const msg = adapter.parseRestMessage({
+    message_id: 'om_text_001',
+    chat_id: 'oc_abc',
+    msg_type: 'text',
+    sender: { id: 'ou_user', sender_type: 'user' },
+    body: { content: JSON.stringify({ text: '/fc im2cc' }) },
+  })
+  assert.ok(msg)
+  assert.equal(msg.kind, 'text')
+  assert.equal(msg.text, '/fc im2cc')
+})
+
 test('FeishuAdapter sends structured panel messages as post payloads', async () => {
   const adapter = new FeishuAdapter(makeConfig())
   let captured = null

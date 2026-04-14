@@ -13,7 +13,8 @@ export interface IncomingMessage {
   conversationId: string   // 飞书群 ID / 微信用户 ID
   transport: TransportType
   senderId: string
-  kind: 'text' | 'file'
+  /** `unsupported` 表示 transport 能看到但本系统暂不处理的消息类型（如飞书富文本 post），需要由 handleMessage 回复提示 */
+  kind: 'text' | 'file' | 'unsupported'
   text?: string
   fileKey?: string
   fileName?: string

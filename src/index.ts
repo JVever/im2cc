@@ -300,6 +300,13 @@ export async function startDaemon(): Promise<void> {
       send(typeof reply === 'string' ? structureSystemReply(reply) : reply)
     const antiPomodoroSnapshot = getAntiPomodoroSnapshot()
 
+    // 不支持的消息类型（例如飞书富文本 post）：回复提示后丢弃
+    if (msg.kind === 'unsupported') {
+      log(`收到不支持的消息类型 [${conversationId}] ${senderId}`)
+      await sendSystem(msg.text ?? '当前不支持这种消息类型')
+      return
+    }
+
     // 文件消息处理
     if (msg.kind === 'file') {
       if (antiPomodoroSnapshot.enabled && antiPomodoroSnapshot.phase === 'rest') {
@@ -353,8 +360,11 @@ export async function startDaemon(): Promise<void> {
           stagedAt: new Date().toISOString(),
         })
 
-        const displayName = msg.msgType === 'image' ? '图片' : msg.fileName
-        await sendSystem(`已收到${displayName}，请发送你的指令`)
+        if (msg.msgType === 'image') {
+          await sendSystem('已收到图片，可继续发送图片；全部发送完毕后请发送文字指令')
+        } else {
+          await sendSystem(`已收到 ${msg.fileName}，请发送你的指令`)
+        }
       } catch (err) {
         error(`[file] 下载失败 [${conversationId}]: ${err}`)
         await sendSystem(`文件下载失败: ${err instanceof Error ? err.message : String(err)}`)
