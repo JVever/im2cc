@@ -163,7 +163,10 @@ export function touch(name: string): void {
 }
 
 /** 更新 registry 中某个 session 的字段 */
-export function updateRegistry(name: string, updates: Partial<Pick<RegisteredSession, 'permissionMode'>>): void {
+export function updateRegistry(
+  name: string,
+  updates: Partial<Pick<RegisteredSession, 'permissionMode' | 'claudeProfile'>>,
+): void {
   const reg = readRegistry()
   if (!reg[name]) return
   Object.assign(reg[name], updates)

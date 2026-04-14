@@ -925,9 +925,26 @@ async function cmdConnect(): Promise<void> {
     return
   }
   session = { ...session, cwd: pathCheck.resolvedPath }
-  registerWithMeta(session.name, session.sessionId, session.cwd, session.tool ?? 'claude', { claudeProfile: session.claudeProfile })
 
   let tool = session.tool ?? 'claude'
+
+  // 补录 claudeProfile：老 session 创建时没存 profile（或通过 discovered/double-arg 路径进入的），
+  // 之前每次 connect 都会让 launcher 提示选择且永不保存。这里首次遇到时提示一次并写回 registry，
+  // 之后 fc/connect 就能直接复用，行为和 fn 新建的 session 一致。
+  if (tool === 'claude' && !session.claudeProfile && hasCustomClaudeLauncher(config)) {
+    try {
+      const picked = selectClaudeProfile(session.cwd, session.name, config)
+      if (picked) {
+        session = { ...session, claudeProfile: picked }
+        console.log(`✏️  已记住渠道: ${picked}（下次 connect 不再提示）`)
+      }
+    } catch (err) {
+      // launcher 不支持 --im2cc-select-profile 或其他原因 → 保持原行为，不写回
+      console.log(`⚠️  补录渠道失败，本次保持老行为: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  registerWithMeta(session.name, session.sessionId, session.cwd, tool, { claudeProfile: session.claudeProfile })
 
   const autoDisable = disableAntiPomodoro('已回到电脑端工作，反茄钟自动关闭。')
   if (autoDisable.changed) {
@@ -1055,8 +1072,18 @@ async function cmdConnectDoubleArg(newName: string, query: string): Promise<void
 
   // 注册（带默认 mode，后续 IM 端 /mode 切换会更新）
   const permissionMode = config.defaultPermissionMode ?? 'default'
-  registerWithMeta(newName, sessionId, cwd, 'claude', { permissionMode })
-  console.log(`✅ 已注册 "${newName}" → ${path.basename(cwd)} [${sessionId.slice(0, 8)}]`)
+
+  // 导入 discovered session 时也选一次 profile，避免后续 fc 每次被 launcher 提示
+  let claudeProfile: string | undefined
+  if (hasCustomClaudeLauncher(config)) {
+    try {
+      claudeProfile = selectClaudeProfile(cwd, newName, config)
+    } catch (err) {
+      console.log(`⚠️  渠道选择失败，跳过记录: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+  registerWithMeta(newName, sessionId, cwd, 'claude', { permissionMode, claudeProfile })
+  console.log(`✅ 已注册 "${newName}" → ${path.basename(cwd)} [${sessionId.slice(0, 8)}]${claudeProfile ? ` [${claudeProfile}]` : ''}`)
 
   const autoDisable = disableAntiPomodoro('已回到电脑端工作，反茄钟自动关闭。')
   if (autoDisable.changed) {
