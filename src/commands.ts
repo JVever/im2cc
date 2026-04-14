@@ -1,12 +1,14 @@
 /**
  * @input:    用户消息文本, Im2ccConfig, Binding
- * @output:   parseCommand(), handleCommand(), renderRegisteredSessionList(), renderLocalRegisteredSessionList() — 命令解析与执行、IM/本地列表渲染（含 /fc 双参数注册模式、/fqon /fqoff /fqs）
+ * @output:   parseCommand(), handleCommand(), renderRegisteredSessionList(), renderLocalRegisteredSessionList() — 命令解析与执行、IM/本地列表渲染（含 /fc 双参数注册模式、/fqon /fqoff /fqs、/ls 工作区项目列表）
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
+import os from 'node:os'
 import path from 'node:path'
 import type { Im2ccConfig } from './config.js'
-import type { TransportType } from './transport.js'
+import type { OutgoingMessage, TransportType } from './transport.js'
+import { textMessage } from './message-format.js'
 import { validatePath, resolvePath, listProjects, isValidSessionName } from './security.js'
 import { createBinding, getBinding, archiveBinding, archiveBindingsBySession, updateBinding, type Binding } from './session.js'
 import { getDriver, hasDriver, type ToolId } from './tool-driver.js'
@@ -36,14 +38,14 @@ function validateSessionProjectPath(rawPath: string, config: Im2ccConfig): { ok:
   if (!validation.valid) {
     return {
       ok: false,
-      message: `❌ ${validation.error}\n如需继续，请先调整路径白名单后再接入这个对话。`,
+      message: `❌ ${validation.error}\n如需继续，请先调整工作区（路径白名单）后再接入这个对话。`,
     }
   }
   return { ok: true, resolvedPath: validation.resolvedPath }
 }
 
 // 统一命令名：电脑端和飞书端尽量保持一致；/help 仅作兼容别名保留
-const COMMANDS = new Set(['fn', 'fc', 'fl', 'fk', 'fs', 'fd', 'mode', 'stop', 'help', 'fhelp', 'fqon', 'fqoff', 'fqs'])
+const COMMANDS = new Set(['fn', 'fc', 'fl', 'ls', 'fk', 'fs', 'fd', 'mode', 'stop', 'help', 'fhelp', 'fqon', 'fqoff', 'fqs'])
 
 export function parseCommand(text: string): ParsedCommand | null {
   const trimmed = text.trim()
@@ -58,11 +60,12 @@ export async function handleCommand(
   conversationId: string,
   config: Im2ccConfig,
   transport: TransportType = 'feishu',
-): Promise<string> {
+): Promise<string | OutgoingMessage> {
   switch (cmd.command) {
     case 'fn': return handleFn(cmd.args, conversationId, config, transport)
     case 'fc': return handleFc(cmd.args, conversationId, config, transport)
     case 'fl': return handleFl()
+    case 'ls': return handleLs(config)
     case 'fk': return handleFk(cmd.args, conversationId)
     case 'fs': return handleFs(conversationId)
     case 'fd': return handleFd(conversationId)
@@ -77,18 +80,9 @@ export async function handleCommand(
   }
 }
 
-async function handleFn(args: string, conversationId: string, config: Im2ccConfig, transport: TransportType = 'feishu'): Promise<string> {
+async function handleFn(args: string, conversationId: string, config: Im2ccConfig, transport: TransportType = 'feishu'): Promise<string | OutgoingMessage> {
   if (!args) {
-    const projects = listProjects(config)
-    if (projects.length === 0) {
-      return [
-        '❌ 当前没有可用项目',
-        `请先确认项目位于这些目录下: ${config.pathWhitelist.join(', ')}`,
-        '如果这是第一次使用，更推荐先在电脑终端运行 fn <名称> <项目路径> 创建第一个对话。',
-      ].join('\n')
-    }
-    const list = projects.map((p, i) => `  ${i + 1}. ${p}`).join('\n')
-    return `📁 可用项目:\n${list}\n\nIM 端创建用法: /fn <对话名称> <项目名> [--tool ${supportedToolChoices()}]\n例如: /fn auth-refactor im2cc --tool codex\n\n首次使用更推荐先在电脑终端运行 fn <名称> 创建第一个对话。`
+    return renderFnUsage(config)
   }
 
   const existing = getBinding(conversationId)
@@ -106,23 +100,20 @@ async function handleFn(args: string, conversationId: string, config: Im2ccConfi
   }
 
   const sessionName = argParts[0]
-  if (!sessionName) return `用法: /fn <对话名称> [项目名] [--tool ${supportedToolChoices()}]`
+  if (!sessionName) return `用法: /fn <对话名> <项目目录> [--tool ${supportedToolChoices()}]`
   if (!isValidSessionName(sessionName)) {
     return `❌ 名称 "${sessionName}" 不合法\n只允许字母、数字、连字符和下划线`
   }
   const projectHint = argParts[1]
   if (!projectHint) {
-    const projects = listProjects(config)
-    if (projects.length === 0) {
-      return [
-        '❌ 缺少项目名',
-        `当前白名单目录下没有可用项目: ${config.pathWhitelist.join(', ')}`,
-        '如果这是第一次使用，请先在电脑终端运行 fn <名称> <项目路径> 创建第一个对话。',
-      ].join('\n')
-    }
-    const list = projects.map((p, i) => `  ${i + 1}. ${p}`).join('\n')
-    return `请指定项目名。\n\n📁 可用项目:\n${list}\n\n用法: /fn <对话名称> <项目名> [--tool ${supportedToolChoices()}]\n例如: /fn ${sessionName} ${projects[0]}`
+    return renderFnMissingProject(config, sessionName)
   }
+
+  // 先验证用户的输入（项目目录是否存在），再验证环境（driver 是否可用）。
+  // 输入错误比环境问题更"浅"，优先反馈给用户更符合心智顺序。
+  const resolved = resolvePath(projectHint, config)
+  const validation = validatePath(resolved, config)
+  if (!validation.valid) return renderFnProjectNotFound(config, projectHint)
 
   // 检查 driver 是否可用
   if (!hasDriver(tool)) {
@@ -137,13 +128,9 @@ async function handleFn(args: string, conversationId: string, config: Im2ccConfi
     return [
       '❌ 当前机器已启用本地 Claude 渠道选择器，不能在 IM 端直接创建 Claude 对话。',
       '请回到电脑终端运行 fn <名称> 创建，这样才能先选择渠道。',
-      '如果要在 IM 端创建，请改用 /fn <名称> <项目名> --tool codex 或 --tool gemini。',
+      '如果要在 IM 端创建，请改用 /fn <名称> <项目目录> --tool codex 或 --tool gemini。',
     ].join('\n')
   }
-
-  const resolved = resolvePath(projectHint, config)
-  const validation = validatePath(resolved, config)
-  if (!validation.valid) return `❌ ${validation.error}`
 
   log(`[${conversationId}] 创建新对话 "${sessionName}" [${tool}] → ${validation.resolvedPath}`)
 
@@ -169,6 +156,119 @@ async function handleFn(args: string, conversationId: string, config: Im2ccConfi
   } catch (err) {
     return `❌ 创建失败: ${err instanceof Error ? err.message : String(err)}`
   }
+}
+
+/** 将绝对路径折回 ~ 形式展示，更易读 */
+function prettyPath(p: string): string {
+  const home = os.homedir()
+  return p === home ? '~' : p.startsWith(home + path.sep) ? '~' + p.slice(home.length) : p
+}
+
+function formatWorkspaces(config: Im2ccConfig): string {
+  return config.pathWhitelist.map(prettyPath).join(', ')
+}
+
+/** 简化 Levenshtein，用于项目名模糊匹配 */
+function levenshtein(a: string, b: string): number {
+  const m = a.length
+  const n = b.length
+  if (m === 0) return n
+  if (n === 0) return m
+  const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0))
+  for (let i = 0; i <= m; i++) dp[i][0] = i
+  for (let j = 0; j <= n; j++) dp[0][j] = j
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost)
+    }
+  }
+  return dp[m][n]
+}
+
+function fuzzyMatchProjects(query: string, projects: string[], max = 3): string[] {
+  const q = query.toLowerCase()
+  return projects
+    .map(name => ({ name, dist: levenshtein(q, name.toLowerCase()) }))
+    .filter(({ name, dist }) => dist <= Math.max(2, Math.floor(name.length / 2)))
+    .sort((a, b) => a.dist - b.dist)
+    .slice(0, max)
+    .map(({ name }) => name)
+}
+
+/** /fn 无参：教用户怎么用，不再一次性倾倒全部项目 */
+function renderFnUsage(config: Im2ccConfig): OutgoingMessage {
+  const lines = [
+    '📝 创建新对话',
+    '',
+    '用法：/fn <对话名> <项目目录>',
+    '示例：/fn auth im2cc',
+    '',
+    '对话名　：给这次对话起的标签，以后用 /fc <对话名> 可以重连',
+    '项目目录：告诉 AI 去哪个目录工作——AI 会以这个目录为根，',
+    '          读写其中的代码、执行命令',
+    '',
+    `查看全部项目目录：/ls`,
+    `当前工作区：${formatWorkspaces(config)}`,
+  ]
+  return textMessage(lines.join('\n'))
+}
+
+/** /fn <对话名>：只给出创建新对话时最关键的缺项提示 */
+function renderFnMissingProject(config: Im2ccConfig, sessionName: string): OutgoingMessage {
+  const lines = [
+    '📝 缺少项目目录',
+    '',
+    '用法：/fn <对话名> <项目目录>',
+    `示例：/fn ${sessionName} im2cc`,
+    '',
+    '项目目录：告诉 AI 去哪个目录工作——AI 会以这个目录为根，',
+    '          读写其中的代码、执行命令',
+    '',
+    `查看全部项目目录：/ls`,
+    `当前工作区：${formatWorkspaces(config)}`,
+  ]
+  return textMessage(lines.join('\n'))
+}
+
+/** /fn <对话名> <不存在的项目目录>：给出模糊匹配建议 */
+function renderFnProjectNotFound(config: Im2ccConfig, query: string): OutgoingMessage {
+  const projects = listProjects(config)
+  const matches = fuzzyMatchProjects(query, projects)
+  const lines = [
+    `❌ 没找到项目目录 "${query}"`,
+    `工作区：${formatWorkspaces(config)}`,
+  ]
+  if (matches.length > 0) {
+    lines.push('', `相近的有：${matches.join(', ')}`)
+  }
+  lines.push('', '列出全部：/ls')
+  return textMessage(lines.join('\n'))
+}
+
+/** /ls：列出工作区下全部项目目录，一行一个，纯文本紧凑显示 */
+function handleLs(config: Im2ccConfig): OutgoingMessage {
+  const projects = listProjects(config)
+  const workspaces = formatWorkspaces(config)
+
+  if (projects.length === 0) {
+    return textMessage([
+      '📁 工作区下还没有项目目录',
+      `工作区：${workspaces}`,
+      '',
+      '请先在工作区下创建或克隆项目，或在电脑端运行 im2cc secure 调整工作区。',
+    ].join('\n'))
+  }
+
+  const lines = [
+    `📁 可用项目目录 (${projects.length})`,
+    `工作区：${workspaces}`,
+    '',
+    ...projects,
+    '',
+    '用法：/fn <对话名> <项目目录>',
+  ]
+  return textMessage(lines.join('\n'))
 }
 
 function describeBoundSession(binding: Binding): string {
@@ -692,6 +792,9 @@ export function renderUnifiedHelp(): string {
     '',
     '飞书 / 微信：',
     '/fhelp                   — 查看帮助',
+    '/fn                      — 查看创建对话的用法',
+    '/fn <对话名> <项目目录>  — 创建新对话',
+    '/ls                      — 列出工作区下的项目目录',
     '/fc <名称>               — 接入已有对话',
     '/fl                      — 列出所有对话',
     '/fk <名称>               — 终止对话',

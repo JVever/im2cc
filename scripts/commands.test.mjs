@@ -16,6 +16,21 @@ const session = await import(path.join(rootDir, 'dist', 'src', 'session.js'))
 
 function resetState() {
   fs.rmSync(path.join(testHome, '.im2cc'), { recursive: true, force: true })
+  fs.rmSync(path.join(testHome, 'Code'), { recursive: true, force: true })
+}
+
+function replyText(reply) {
+  if (typeof reply === 'string') return reply
+  if (reply && typeof reply === 'object' && reply.kind === 'text') return reply.text
+  if (reply && typeof reply === 'object' && reply.kind === 'panel') {
+    const lines = [reply.title]
+    for (const section of reply.sections) {
+      if (section.title) lines.push(section.title + '：')
+      lines.push(...section.lines)
+    }
+    return lines.join('\n')
+  }
+  throw new Error(`Unexpected reply shape: ${JSON.stringify(reply)}`)
 }
 
 function configForTests() {
@@ -228,10 +243,87 @@ test('first-run guidance prefers computer-side creation and IM /fn requires expl
 
   const fnCmd = commands.parseCommand('/fn demo')
   assert.ok(fnCmd)
-  const fnOutput = await commands.handleCommand(fnCmd, 'conv-empty', config)
-  assert.match(fnOutput, /请指定项目名/)
-  assert.match(fnOutput, /📁 可用项目:/)
-  assert.match(fnOutput, /im2cc/)
-  assert.match(fnOutput, /portal/)
-  assert.match(fnOutput, /\/fn <对话名称> <项目名>/)
+  const fnReply = await commands.handleCommand(fnCmd, 'conv-empty', config)
+  const fnOutput = replyText(fnReply)
+  assert.match(fnOutput, /📝 缺少项目目录/)
+  assert.match(fnOutput, /用法：\/fn <对话名> <项目目录>/)
+  assert.match(fnOutput, /示例：\/fn demo im2cc/)
+  assert.match(fnOutput, /项目目录：告诉 AI 去哪个目录工作/)
+  assert.match(fnOutput, /查看全部项目目录：\/ls/)
+  assert.match(fnOutput, /当前工作区：~\/Code/)
+})
+
+test('/fn with no args shows usage card, not project list', async () => {
+  resetState()
+  const config = configForTests()
+  configMod.saveConfig(config)
+
+  fs.mkdirSync(path.join(testHome, 'Code', 'im2cc'), { recursive: true })
+  fs.mkdirSync(path.join(testHome, 'Code', 'portal'), { recursive: true })
+
+  const fnCmd = commands.parseCommand('/fn')
+  assert.ok(fnCmd)
+  const reply = await commands.handleCommand(fnCmd, 'conv-usage', config)
+  assert.equal(reply && reply.kind, 'text', '/fn 无参应返回纯文本消息绕过 panel markdown')
+  const out = replyText(reply)
+  assert.match(out, /📝 创建新对话/)
+  assert.match(out, /用法：\/fn <对话名> <项目目录>/)
+  assert.match(out, /示例：\/fn auth im2cc/)
+  assert.match(out, /对话名.*给这次对话起的标签/)
+  assert.match(out, /项目目录.*告诉 AI 去哪个目录工作/)
+  assert.match(out, /查看全部项目目录：\/ls/)
+  assert.match(out, /当前工作区：~\/Code/)
+  // 教学卡片不应当场列出项目
+  assert.doesNotMatch(out, /^im2cc$/m)
+  assert.doesNotMatch(out, /^portal$/m)
+})
+
+test('/ls lists projects one per line as plain text', async () => {
+  resetState()
+  const config = configForTests()
+  configMod.saveConfig(config)
+
+  fs.mkdirSync(path.join(testHome, 'Code', 'im2cc'), { recursive: true })
+  fs.mkdirSync(path.join(testHome, 'Code', 'portal'), { recursive: true })
+  fs.mkdirSync(path.join(testHome, 'Code', 'aicam'), { recursive: true })
+
+  const lsCmd = commands.parseCommand('/ls')
+  assert.ok(lsCmd)
+  const reply = await commands.handleCommand(lsCmd, 'conv-ls', config)
+  assert.equal(reply && reply.kind, 'text', '/ls 必须返回纯文本，否则飞书会渲染成大间距列表')
+  const out = replyText(reply)
+  assert.match(out, /📁 可用项目目录 \(3\)/)
+  assert.match(out, /工作区：~\/Code/)
+  assert.match(out, /^aicam$/m)
+  assert.match(out, /^im2cc$/m)
+  assert.match(out, /^portal$/m)
+  assert.match(out, /用法：\/fn <对话名> <项目目录>/)
+})
+
+test('/ls on empty workspace explains what to do', async () => {
+  resetState()
+  const config = configForTests()
+  configMod.saveConfig(config)
+
+  const lsCmd = commands.parseCommand('/ls')
+  const reply = await commands.handleCommand(lsCmd, 'conv-ls-empty', config)
+  const out = replyText(reply)
+  assert.match(out, /📁 工作区下还没有项目目录/)
+  assert.match(out, /工作区：~\/Code/)
+})
+
+test('/fn with unknown project suggests similar names', async () => {
+  resetState()
+  const config = configForTests()
+  configMod.saveConfig(config)
+
+  fs.mkdirSync(path.join(testHome, 'Code', 'im2cc'), { recursive: true })
+  fs.mkdirSync(path.join(testHome, 'Code', 'aicam'), { recursive: true })
+
+  const fnCmd = commands.parseCommand('/fn demo im2ccx')
+  const reply = await commands.handleCommand(fnCmd, 'conv-typo', config)
+  const out = replyText(reply)
+  assert.match(out, /❌ 没找到项目目录 "im2ccx"/)
+  assert.match(out, /相近的有：im2cc/)
+  assert.match(out, /列出全部：\/ls/)
 })

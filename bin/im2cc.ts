@@ -79,7 +79,7 @@ function validateSessionPathForAttach(cwd: string, config: Im2ccConfig): { ok: t
   if (!validation.valid) {
     return {
       ok: false,
-      message: `❌ ${validation.error}\n如需继续，请先调整路径白名单后再接入这个对话。`,
+      message: `❌ ${validation.error}\n如需继续，请先调整工作区（路径白名单）后再接入这个对话。`,
     }
   }
   return { ok: true, resolvedPath: validation.resolvedPath }

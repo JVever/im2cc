@@ -97,7 +97,7 @@ test('/fc rejects registered sessions outside path whitelist', async () => {
   const output = await commands.handleCommand(cmd, 'conv-bad', config)
 
   assert.match(output, /路径不在白名单内/)
-  assert.match(output, /调整路径白名单/)
+  assert.match(output, /调整工作区（路径白名单）/)
   assert.doesNotMatch(output, /已接入/)
 })
 
@@ -115,7 +115,7 @@ test('/fc <newName> <ID前缀> rejects discovered sessions outside path whitelis
   const output = await commands.handleCommand(cmd, 'conv-discovered', config)
 
   assert.match(output, /路径不在白名单内/)
-  assert.match(output, /调整路径白名单/)
+  assert.match(output, /调整工作区（路径白名单）/)
 })
 
 test('im2cc connect rejects registered sessions outside path whitelist', () => {
@@ -134,7 +134,7 @@ test('im2cc connect rejects registered sessions outside path whitelist', () => {
   })
 
   assert.match(stdout, /路径不在白名单内/)
-  assert.match(stdout, /调整路径白名单/)
+  assert.match(stdout, /调整工作区（路径白名单）/)
 })
 
 test('im2cc connect <newName> <ID前缀> rejects discovered sessions outside path whitelist', () => {
@@ -153,5 +153,5 @@ test('im2cc connect <newName> <ID前缀> rejects discovered sessions outside pat
   })
 
   assert.match(stdout, /路径不在白名单内/)
-  assert.match(stdout, /调整路径白名单/)
+  assert.match(stdout, /调整工作区（路径白名单）/)
 })

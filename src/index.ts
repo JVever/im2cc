@@ -296,7 +296,8 @@ export async function startDaemon(): Promise<void> {
     }
 
     const send = (message: string | OutgoingMessage) => sendToConversation(transport, conversationId, message)
-    const sendSystem = (text: string) => send(structureSystemReply(text))
+    const sendSystem = (reply: string | OutgoingMessage) =>
+      send(typeof reply === 'string' ? structureSystemReply(reply) : reply)
     const antiPomodoroSnapshot = getAntiPomodoroSnapshot()
 
     // 文件消息处理
@@ -394,7 +395,8 @@ export async function startDaemon(): Promise<void> {
         const hadBindingBefore = Boolean(getBinding(conversationId))
         const reply = await handleCommand(cmd, conversationId, config, transport)
         const binding = getBinding(conversationId)
-        if (shouldSendFcRecap(cmd, hadBindingBefore, Boolean(binding), config.recapBudget)) {
+        // recap 只在 /fc 成功重连时发生，那条路径返回的一定是 string
+        if (typeof reply === 'string' && shouldSendFcRecap(cmd, hadBindingBefore, Boolean(binding), config.recapBudget)) {
           if (binding) {
             try {
               const driver = getDriver(binding.tool ?? 'claude')
