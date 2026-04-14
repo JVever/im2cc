@@ -25,8 +25,8 @@ When the repository is not yet present locally:
 - if `git clone` fails but ordinary HTTPS downloads still work, fall back to downloading the public source archive:
 
   ```bash
-  mkdir -p ~/im2cc
-  curl -L https://codeload.github.com/JVever/im2cc/tar.gz/refs/heads/master | tar -xz -C ~/im2cc --strip-components=1
+  mkdir -p ~/.im2cc-app
+  curl -L https://codeload.github.com/JVever/im2cc/tar.gz/refs/heads/master | tar -xz -C ~/.im2cc-app --strip-components=1
   ```
 
 - if both checkout paths fail, diagnose `git` availability and network access before asking the user to log in anywhere

@@ -16,8 +16,8 @@ If the user only provides the GitHub URL before checkout:
 - if `git clone` fails but ordinary HTTPS downloads still work, fall back to the public source archive:
 
   ```bash
-  mkdir -p ~/im2cc
-  curl -L https://codeload.github.com/JVever/im2cc/tar.gz/refs/heads/master | tar -xz -C ~/im2cc --strip-components=1
+  mkdir -p ~/.im2cc-app
+  curl -L https://codeload.github.com/JVever/im2cc/tar.gz/refs/heads/master | tar -xz -C ~/.im2cc-app --strip-components=1
   ```
 
 - if both checkout paths fail, first diagnose missing `git` or network/proxy issues

@@ -10,14 +10,14 @@
 
 `im2cc` 是公开仓库。获取代码时：
 
-- 优先使用普通 HTTPS clone：`git clone https://github.com/JVever/im2cc.git ~/im2cc`
+- 优先使用普通 HTTPS clone：`git clone https://github.com/JVever/im2cc.git ~/.im2cc-app`
 - 不要优先使用 `gh repo clone`
 - 不要依赖需要 GitHub 登录态的 API / MCP / 集成
 - 如果 clone 失败，但普通 HTTPS 下载仍可用，使用源码包 fallback：
 
   ```bash
-  mkdir -p ~/im2cc
-  curl -L https://codeload.github.com/JVever/im2cc/tar.gz/refs/heads/master | tar -xz -C ~/im2cc --strip-components=1
+  mkdir -p ~/.im2cc-app
+  curl -L https://codeload.github.com/JVever/im2cc/tar.gz/refs/heads/master | tar -xz -C ~/.im2cc-app --strip-components=1
   ```
 
 - 如果 clone 和源码包下载都失败，先检查 `git` 是否安装、网络是否可达 `github.com`
@@ -39,7 +39,7 @@
 ### 2. 编译和注册
 
 ```bash
-cd ~/im2cc       # 或用户指定的安装目录
+cd ~/.im2cc-app   # 或用户指定的安装目录（与运行时数据目录 ~/.im2cc/ 区分开）
 npm install
 npm run build
 npm link          # 如果权限不够，用 sudo npm link

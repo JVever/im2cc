@@ -1,6 +1,6 @@
 #!/bin/bash
 # im2cc 一键安装脚本
-# 用法: git clone ... && cd im2cc && bash install.sh
+# 用法: git clone https://github.com/JVever/im2cc.git ~/.im2cc-app && cd ~/.im2cc-app && bash install.sh
 
 set -euo pipefail
 
