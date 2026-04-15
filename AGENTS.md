@@ -1,6 +1,8 @@
 # im2cc Agent Instructions
 
-This repository includes a full onboarding workflow for installing, configuring, validating, and hardening im2cc on a user's machine.
+This repository includes:
+- a full onboarding workflow for installing, configuring, validating, and hardening im2cc on a user's machine (below);
+- a maintainer release SOP at [`RELEASE.md`](./RELEASE.md) — **any AI assistant asked to "push" / "release" / "publish" im2cc must follow RELEASE.md step-by-step**, not improvise. Do not run `npm publish` without explicit maintainer authorization in the current conversation.
 
 ## When to use the onboarding workflow
 
