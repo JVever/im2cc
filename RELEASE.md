@@ -94,11 +94,14 @@ npm publish
 **认证方式（本账号 `jvever`）**：浏览器 web auth，**不是** authenticator OTP。
 
 流程是：
-1. 跑 `npm publish`，npm 会打印一行 `Open this URL in your browser to authenticate: https://www.npmjs.com/auth/cli/<token>`
-2. maintainer 在浏览器打开该 URL，登录 npmjs.com 后点 "Authorize"
-3. 本地 npm 进程自动收到 token，继续完成 publish（AI 助手**不需要**索要 6 位验证码）
+1. maintainer 在**自己的交互式终端**跑 `npm publish`
+2. npm 打印 `Open this URL in your browser to authenticate: https://www.npmjs.com/auth/cli/<uuid>` 并打开浏览器
+3. maintainer 在浏览器登录 npmjs.com，点 "Authorize"
+4. 本地 npm 进程自动收到 token，继续完成 publish
 
-AI 助手该做的：把 npm 打印的 URL 原样贴给 maintainer，等待 maintainer 说"已授权"或者 publish 命令自行成功退出，然后再走 Step 6。**不要**反复重跑 publish 来"催"授权——每次重跑都会生成新的授权 URL，让 maintainer 更困惑。
+**AI 助手不要代跑 `npm publish`**。原因：在非交互子进程里 npm 会把 URL 中的 UUID 脱敏成 `***`（见实测），AI 无法把真实 URL 贴给 maintainer，反而制造困惑。正确做法是直接请 maintainer 在自己终端跑 `npm publish`，publish 完成后再走 Step 6 验证。
+
+如果 maintainer 没有交互式终端（远程 CI 等场景），改用 `npm token create` 提前生成长期 token，通过 `NPM_TOKEN` 环境变量 + `.npmrc` 的 `//registry.npmjs.org/:_authToken=${NPM_TOKEN}` 发布。本仓库目前不走 CI 发布路径。
 
 如遇网络/registry 问题：
 - 检查 `npm config get registry`（应是 `https://registry.npmjs.org/`）
