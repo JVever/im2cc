@@ -1,7 +1,7 @@
 {
   "name": "im2cc",
-  "version": "0.2.0",
-  "description": "通过飞书或微信远程操控本地 AI coding tools，电脑与手机无缝流转",
+  "version": "0.3.0",
+  "description": "通过飞书或微信远程操控本地 AI coding tools（Claude Code / Codex / Gemini），电脑与手机无缝流转",
   "type": "module",
   "main": "dist/src/index.js",
   "bin": {
@@ -12,13 +12,36 @@
     "dev": "tsc --watch",
     "start": "node dist/src/index.js",
     "lint": "tsc --noEmit",
-    "smoke": "bash scripts/smoke.sh"
+    "smoke": "bash scripts/smoke.sh",
+    "prepublishOnly": "tsc"
   },
   "engines": {
     "node": ">=20"
   },
-  "files": ["dist", "shell", "install.sh", "INSTALL.md", "LICENSE", "README.md"],
+  "os": ["darwin"],
+  "files": ["dist", "shell", "LICENSE", "README.md"],
+  "keywords": [
+    "feishu",
+    "lark",
+    "wechat",
+    "claude-code",
+    "codex",
+    "gemini-cli",
+    "remote-control",
+    "cli",
+    "tmux",
+    "mobile"
+  ],
+  "author": "JVever <jinxisjinx001@gmail.com>",
   "license": "GPL-3.0-only",
+  "homepage": "https://github.com/JVever/im2cc#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JVever/im2cc.git"
+  },
+  "bugs": {
+    "url": "https://github.com/JVever/im2cc/issues"
+  },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.59.0",
     "axios": "^1.13.6",
