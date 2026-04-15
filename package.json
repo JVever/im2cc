@@ -1,6 +1,6 @@
 {
   "name": "im2cc",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "通过飞书或微信远程操控本地 AI coding tools（Claude Code / Codex / Gemini），电脑与手机无缝流转",
   "type": "module",
   "main": "dist/src/index.js",
@@ -18,8 +18,15 @@
   "engines": {
     "node": ">=20"
   },
-  "os": ["darwin"],
-  "files": ["dist", "shell", "LICENSE", "README.md"],
+  "os": [
+    "darwin"
+  ],
+  "files": [
+    "dist",
+    "shell",
+    "LICENSE",
+    "README.md"
+  ],
   "keywords": [
     "feishu",
     "lark",
