@@ -1,26 +1,28 @@
 ---
 name: im2cc-onboarding
-description: "Complete the full im2cc onboarding journey after the repository is available locally: install dependencies, build and register im2cc, connect Feishu or WeChat, call $create-feishu-bot when needed, validate the mobile command path, create the first real session, and enable auto-start. Use when the user asks to install, configure, continue, repair, or validate im2cc."
+description: "Complete the full im2cc onboarding journey: install via npm, connect Feishu or WeChat, call $create-feishu-bot when needed, validate the mobile command path, create the first real session, and enable auto-start. Use when the user asks to install, configure, continue, repair, or validate im2cc."
 ---
 
 # im2cc Onboarding
 
-Use this skill after the `im2cc` repository is already present on disk. This skill is the repo-local onboarding orchestrator for zero-to-one setup and first-run success.
+Run this skill for zero-to-one setup and first-run success.
 
-If the user only provides the GitHub URL before checkout:
+## Install path
 
-- treat `https://github.com/JVever/im2cc.git` as a public repo
-- prefer plain `git clone` over HTTPS
-- do not depend on `gh auth login`
-- do not assume any authenticated GitHub integration is required
-- if `git clone` fails but ordinary HTTPS downloads still work, fall back to the public source archive:
+Default to npm global install:
 
+```bash
+npm i -g im2cc
+im2cc onboard
+```
+
+- If npm reports permission issues on `/usr/local`, set `npm config set prefix ~/.npm-global` and add `~/.npm-global/bin` to `$PATH`, then retry.
+- If the npm package is not yet published (404), fall back to source bootstrap:
   ```bash
-  mkdir -p ~/.im2cc-app
-  curl -L https://codeload.github.com/JVever/im2cc/tar.gz/refs/heads/master | tar -xz -C ~/.im2cc-app --strip-components=1
+  git clone https://github.com/JVever/im2cc.git && cd im2cc && bash install.sh
+  im2cc install-shell && im2cc install-hook && im2cc onboard
   ```
-
-- if both checkout paths fail, first diagnose missing `git` or network/proxy issues
+- Do not require `gh auth login` or authenticated GitHub APIs.
 
 ## Scope
 
@@ -72,13 +74,11 @@ Read `references/install-flow.md` before making changes.
 
 If base installation is incomplete:
 
-- install dependencies
-- build the project
-- register `im2cc`
-- install shell helpers
-- install the Claude session-sync hook
+- `npm i -g im2cc` (primary path)
+- `im2cc install-shell` (writes fn/fc/fl to `~/.zshrc`; idempotent)
+- `im2cc install-hook` (writes Claude SessionStart hook to `~/.claude/settings.json`; idempotent)
 
-Do not stop after `bash install.sh` unless the user explicitly asked for a shallow install.
+`im2cc onboard` calls install-shell / install-hook automatically the first time, so after `npm i -g im2cc` you only need to run `im2cc onboard`.
 
 ### 3. Select the channel
 

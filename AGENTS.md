@@ -16,24 +16,24 @@ Use the repo-local `im2cc-onboarding` skill when the user wants any of the follo
 
 Treat onboarding as a stateful workflow, not as a one-shot shell script.
 
-When the repository is not yet present locally:
+Install im2cc via npm global:
 
-- treat `https://github.com/JVever/im2cc.git` as a public repository
-- prefer plain `git clone` over HTTPS
-- do not require `gh auth login`
-- do not route through authenticated GitHub APIs or integrations unless the user explicitly asks for that path
-- if `git clone` fails but ordinary HTTPS downloads still work, fall back to downloading the public source archive:
+```bash
+npm i -g im2cc
+im2cc onboard
+```
 
+- If `npm i -g im2cc` reports permission issues, help the user configure `npm config set prefix ~/.npm-global` and add `~/.npm-global/bin` to `$PATH`, then retry.
+- If `npm i -g im2cc` returns 404 (package not yet published), fall back to source bootstrap:
   ```bash
-  mkdir -p ~/.im2cc-app
-  curl -L https://codeload.github.com/JVever/im2cc/tar.gz/refs/heads/master | tar -xz -C ~/.im2cc-app --strip-components=1
+  git clone https://github.com/JVever/im2cc.git && cd im2cc && bash install.sh
+  im2cc install-shell && im2cc install-hook && im2cc onboard
   ```
-
-- if both checkout paths fail, diagnose `git` availability and network access before asking the user to log in anywhere
+- Do not rely on `gh auth login` or authenticated GitHub APIs.
 
 You should:
 
-1. detect the current install state
+1. detect the current install state (run `im2cc doctor` if already installed)
 2. complete missing base installation steps
 3. ask which IM channel the user wants to set up first: Feishu or WeChat
 4. prefer completing one IM end-to-end before offering the second
