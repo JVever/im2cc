@@ -17,3 +17,8 @@ PROJECT.md
 DEVLOG.md
 TASKS.md
 docs/builder-task/
+
+# 本地 AI 工具运行状态（不随代码分发）
+.agents/
+.claude/scheduled_tasks.lock
+.claude/projects/
