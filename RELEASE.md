@@ -91,7 +91,16 @@ git push --follow-tags
 npm publish
 ```
 
-如遇 2FA 要求，按提示输入 OTP。如遇网络/registry 问题：
+**认证方式（本账号 `jvever`）**：浏览器 web auth，**不是** authenticator OTP。
+
+流程是：
+1. 跑 `npm publish`，npm 会打印一行 `Open this URL in your browser to authenticate: https://www.npmjs.com/auth/cli/<token>`
+2. maintainer 在浏览器打开该 URL，登录 npmjs.com 后点 "Authorize"
+3. 本地 npm 进程自动收到 token，继续完成 publish（AI 助手**不需要**索要 6 位验证码）
+
+AI 助手该做的：把 npm 打印的 URL 原样贴给 maintainer，等待 maintainer 说"已授权"或者 publish 命令自行成功退出，然后再走 Step 6。**不要**反复重跑 publish 来"催"授权——每次重跑都会生成新的授权 URL，让 maintainer 更困惑。
+
+如遇网络/registry 问题：
 - 检查 `npm config get registry`（应是 `https://registry.npmjs.org/`）
 - 避免在发布时挂代理指向非官方镜像
 
@@ -109,6 +118,7 @@ npm view im2cc version   # 应显示刚发布的新版本
 |-----|-----|
 | `npm version` 报工作区不干净 | 先 commit / stash，再重试 |
 | `npm publish` 报 403 / E402 | 检查 `npm whoami` 和包权限 |
+| `npm publish` 报 EOTP / 要求 OTP 或 "Open this URL in your browser" | 见 Step 5 认证方式 — 本账号用浏览器 web auth |
 | `git push` 被拒（non-fast-forward） | `git pull --rebase`，**不要** `--force` |
 | 发现已 publish 但代码有 bug | **不要** `npm unpublish`（24h 后不可撤）；发 patch 版本修复 |
 | `npm view im2cc version` 滞后 | 正常，CDN 有 1-2 分钟延迟 |
