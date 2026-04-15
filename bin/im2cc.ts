@@ -20,7 +20,8 @@ import { findSession, syncDriftedSession } from '../src/discover.js'
 import { DAEMON_LOCK_STARTUP_GRACE_MS, DAEMON_MARKER, daemonMainModulePath, isIm2ccDaemonProcess, killAllDaemonProcesses, listDaemonProcessPids, readDaemonPidRecord } from '../src/daemon-process.js'
 import { claudeSupportsSessionNameFlag } from '../src/tool-compat.js'
 import { renderLocalRegisteredSessionList, renderRegisteredSessionList, renderUnifiedHelp } from '../src/commands.js'
-import { detectInstallRoot, listReplaceableInstallEntries, PUBLIC_ARCHIVE_URL } from '../src/upgrade.js'
+import { detectInstallRoot, NPM_PACKAGE_NAME } from '../src/upgrade.js'
+import { IM2CC_SHELL_FUNCTIONS, SHELL_MARKER_END, SHELL_MARKER_START, writeShellHelpersToRc } from '../src/shell-install.js'
 import { hasCustomClaudeLauncher, selectClaudeProfile } from '../src/claude-launcher.js'
 import { disableAntiPomodoro, enableAntiPomodoro, formatAntiPomodoroStatus, getAntiPomodoroSnapshot } from '../src/anti-pomodoro.js'
 import { interruptInflightTasksForSession, listCompletedInflightSnapshotsForSession, listInflightTasksForSession, type CompletedInflightSnapshot, type InflightTaskSnapshot } from '../src/queue.js'
@@ -98,93 +99,73 @@ function currentInstallRoot() {
   return detectInstallRoot(import.meta.dirname)
 }
 
-function ensureCleanGitCheckout(root: string): void {
-  const status = execFileSync('git', ['status', '--porcelain'], {
-    cwd: root,
-    encoding: 'utf-8',
-    stdio: ['ignore', 'pipe', 'ignore'],
-  }).trim()
-
-  if (status) {
-    console.log('❌ 当前安装目录有未提交改动，已停止自动更新。')
-    console.log('请先提交、暂存或清理这些改动后再运行 im2cc update。')
-    process.exit(1)
-  }
-}
-
-function upgradeFromPublicArchive(root: string): void {
-  if (!commandExists('curl') || !commandExists('tar')) {
-    console.log('❌ 当前安装不含 .git，需要用公开源码包更新，但本机缺少 curl 或 tar。')
-    console.log('请先安装 curl 与 tar，或重新用 git clone 安装后再更新。')
-    process.exit(1)
-  }
-
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'im2cc-upgrade-'))
-  const archivePath = path.join(tmpDir, 'im2cc.tar.gz')
-  const extractDir = path.join(tmpDir, 'extract')
-  fs.mkdirSync(extractDir, { recursive: true })
-
-  try {
-    console.log('当前安装目录不含 .git，改用公开源码包更新...')
-    execFileSync('curl', ['-L', PUBLIC_ARCHIVE_URL, '-o', archivePath], { stdio: 'inherit' })
-    execFileSync('tar', ['-xzf', archivePath, '-C', extractDir], { stdio: 'inherit' })
-
-    const entries = fs.readdirSync(extractDir)
-    if (entries.length === 0) throw new Error('公开源码包解压后为空')
-    const extractedRoot = path.join(extractDir, entries[0])
-
-    for (const entry of listReplaceableInstallEntries(root)) {
-      fs.rmSync(path.join(root, entry), { recursive: true, force: true })
-    }
-    for (const entry of fs.readdirSync(extractedRoot)) {
-      fs.cpSync(path.join(extractedRoot, entry), path.join(root, entry), { recursive: true, force: true })
-    }
-  } catch (err) {
-    console.log(`❌ 公开源码包更新失败: ${err instanceof Error ? err.message : String(err)}`)
-    process.exit(1)
-  } finally {
-    fs.rmSync(tmpDir, { recursive: true, force: true })
-  }
-}
-
 async function cmdUpdate(): Promise<void> {
   const installRoot = currentInstallRoot()
   if (!installRoot) {
-    console.log('❌ 无法定位 im2cc 安装目录。请进入仓库目录后重试。')
+    console.log('❌ 无法定位 im2cc 安装目录。')
+    console.log('   推荐重新安装：npm i -g im2cc')
     process.exit(1)
   }
 
   const daemonStateBefore = inspectLocalDaemonState()
   const shouldRestartDaemon = daemonStateBefore.kind === 'running' || daemonStateBefore.kind === 'starting'
 
-  console.log(`开始更新 im2cc (${installRoot.root})`)
+  if (installRoot.mode === 'npm-global') {
+    await updateViaNpm(shouldRestartDaemon)
+    return
+  }
 
-  try {
-    if (installRoot.isGitCheckout) {
-      if (!commandExists('git')) {
-        console.log('❌ 当前安装目录包含 .git，但本机未安装 git。请先安装 git 后再更新。')
-        process.exit(1)
-      }
-      ensureCleanGitCheckout(installRoot.root)
-      console.log('正在拉取最新代码...')
-      execFileSync('git', ['pull', '--ff-only'], { cwd: installRoot.root, stdio: 'inherit' })
-    } else {
-      upgradeFromPublicArchive(installRoot.root)
-    }
-
-    console.log('正在重新执行安装脚本...')
-    execFileSync('bash', ['install.sh'], { cwd: installRoot.root, stdio: 'inherit' })
-
-    if (shouldRestartDaemon) {
-      console.log('检测到守护进程原本正在运行，正在重启...')
-      cmdStop()
-      await cmdStart()
-    } else {
-      console.log('守护进程当前未运行，本次不自动启动。')
-    }
-  } catch (err) {
-    console.log(`❌ 更新失败: ${err instanceof Error ? err.message : String(err)}`)
+  if (installRoot.mode === 'git-checkout') {
+    console.log('⚠️  当前是从源码 (git clone) 安装，不走 im2cc update。')
+    console.log('')
+    console.log(`开发者更新方式（在 ${installRoot.root} 内）：`)
+    console.log('    git pull --ff-only')
+    console.log('    npm install')
+    console.log('    npm run build')
+    console.log('    im2cc stop && im2cc start')
+    console.log('')
+    console.log('或改用 npm 分发版：')
+    console.log(`    rm -rf ${installRoot.root}`)
+    console.log('    npm i -g im2cc')
     process.exit(1)
+  }
+
+  if (installRoot.mode === 'tarball') {
+    console.log('⚠️  当前是历史的 tarball 安装模式（已弃用）。')
+    console.log('   推荐迁移到 npm 安装：')
+    console.log(`       rm -rf ${installRoot.root}`)
+    console.log('       npm i -g im2cc')
+    process.exit(1)
+  }
+
+  console.log(`❌ 未识别的安装模式: ${installRoot.root}`)
+  console.log('   推荐重新安装：npm i -g im2cc')
+  process.exit(1)
+}
+
+async function updateViaNpm(shouldRestartDaemon: boolean): Promise<void> {
+  if (!commandExists('npm')) {
+    console.log('❌ 未检测到 npm 命令。请先安装 Node.js（含 npm）后重试。')
+    process.exit(1)
+  }
+
+  console.log(`正在通过 npm 更新 ${NPM_PACKAGE_NAME} 到最新版本...`)
+  try {
+    execFileSync('npm', ['i', '-g', `${NPM_PACKAGE_NAME}@latest`], { stdio: 'inherit' })
+  } catch (err) {
+    console.log(`❌ npm 更新失败: ${err instanceof Error ? err.message : String(err)}`)
+    console.log('   常见原因：')
+    console.log('     • npm 全局目录权限不足 → 配置 ~/.npmrc prefix=~/.npm-global，或使用 sudo')
+    console.log('     • 网络问题 → 检查代理或 registry 设置')
+    process.exit(1)
+  }
+
+  if (shouldRestartDaemon) {
+    console.log('检测到守护进程原本正在运行，正在重启...')
+    cmdStop()
+    await cmdStart()
+  } else {
+    console.log('守护进程当前未运行，本次不自动启动。')
   }
 
   console.log('✅ 更新完成')
@@ -208,6 +189,8 @@ switch (command) {
   case 'secure': await cmdSecure(); break
   case 'onboard': cmdOnboard(); break
   case 'install-service': cmdInstallService(); break
+  case 'install-shell': cmdInstallShell(); break
+  case 'install-hook': cmdInstallHook(); break
   case 'doctor': cmdDoctor(); break
   case 'help': cmdHelp(); break
   case 'fhelp': cmdHelp(); break
@@ -251,6 +234,8 @@ switch (command) {
 
   运维:
   sessions           列出活跃绑定
+  install-shell      写入终端快捷命令（fn/fc/fl 等）
+  install-hook       写入 Claude Code session 同步 hook
   install-service    安装 macOS 开机自启
   doctor             检查环境
   fqon               开启反茄钟
@@ -1394,6 +1379,106 @@ async function cmdSecure(): Promise<void> {
   console.log('建议再运行一次 im2cc doctor 确认当前状态。')
 }
 
+function candidateShellRcFiles(): string[] {
+  const home = os.homedir()
+  const candidates: string[] = []
+  const shell = process.env.SHELL ?? ''
+  const zshrc = path.join(home, '.zshrc')
+  const bashrc = path.join(home, '.bashrc')
+
+  if (shell.endsWith('/zsh') || fs.existsSync(zshrc)) candidates.push(zshrc)
+  if (shell.endsWith('/bash') || fs.existsSync(bashrc)) candidates.push(bashrc)
+
+  return candidates
+}
+
+function cmdInstallShell(): void {
+  const rcFiles = candidateShellRcFiles()
+
+  if (rcFiles.length === 0) {
+    console.log('⚠️  未检测到 ~/.zshrc 或 ~/.bashrc')
+    console.log('请手动把以下内容加到你的 shell 配置文件:')
+    console.log('')
+    console.log(SHELL_MARKER_START)
+    console.log(IM2CC_SHELL_FUNCTIONS)
+    console.log(SHELL_MARKER_END)
+    return
+  }
+
+  for (const rc of rcFiles) {
+    const result = writeShellHelpersToRc(rc)
+    if (result === 'unchanged') {
+      console.log(`✅ ${rc}: 已是最新，无需改动`)
+    } else {
+      console.log(`✅ ${rc}: 已${result === 'created' ? '创建' : '更新'}`)
+    }
+  }
+  console.log('')
+  console.log('重新打开终端，或在当前 shell 执行 source 使其生效。')
+}
+
+function resolvePackagedHookScript(): string {
+  return path.resolve(import.meta.dirname, '../../shell/im2cc-session-sync.sh')
+}
+
+function cmdInstallHook(): void {
+  const hookScript = resolvePackagedHookScript()
+  if (!fs.existsSync(hookScript)) {
+    console.log(`❌ 找不到 session-sync hook 脚本: ${hookScript}`)
+    console.log('   这通常意味着 im2cc 安装不完整，建议重新运行 npm i -g im2cc')
+    process.exit(1)
+  }
+  try { fs.chmodSync(hookScript, 0o755) } catch {}
+
+  const settingsPath = path.join(os.homedir(), '.claude/settings.json')
+  const settingsDir = path.dirname(settingsPath)
+  if (!fs.existsSync(settingsDir)) fs.mkdirSync(settingsDir, { recursive: true })
+
+  type HookEntry = { matcher?: string; hooks?: Array<{ type?: string; command?: string }>; type?: string; command?: string }
+  type Settings = { hooks?: { SessionStart?: HookEntry[] } & Record<string, HookEntry[]> } & Record<string, unknown>
+
+  let settings: Settings = {}
+  if (fs.existsSync(settingsPath)) {
+    try {
+      settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as Settings
+    } catch {
+      console.log(`❌ ${settingsPath} 不是合法 JSON，请手动修复后重试`)
+      process.exit(1)
+    }
+  }
+
+  if (!settings.hooks || typeof settings.hooks !== 'object') settings.hooks = {}
+  const sessionHooks: HookEntry[] = Array.isArray(settings.hooks.SessionStart) ? settings.hooks.SessionStart : []
+
+  const rebuilt: HookEntry[] = []
+  let found = false
+  for (const entry of sessionHooks) {
+    if (entry && Array.isArray(entry.hooks)) {
+      const im2ccInner = entry.hooks.some(h => typeof h?.command === 'string' && h.command.includes('im2cc-session-sync'))
+      if (im2ccInner) {
+        rebuilt.push({ matcher: entry.matcher ?? '', hooks: [{ type: 'command', command: hookScript }] })
+        found = true
+        continue
+      }
+    }
+    if (entry && entry.type === 'command' && typeof entry.command === 'string' && entry.command.includes('im2cc-session-sync')) {
+      rebuilt.push({ matcher: '', hooks: [{ type: 'command', command: hookScript }] })
+      found = true
+      continue
+    }
+    rebuilt.push(entry)
+  }
+  if (!found) {
+    rebuilt.push({ matcher: '', hooks: [{ type: 'command', command: hookScript }] })
+  }
+  settings.hooks.SessionStart = rebuilt
+
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2))
+  console.log(`✅ Claude session-sync hook 已配置`)
+  console.log(`   hook 脚本: ${hookScript}`)
+  console.log(`   settings : ${settingsPath}`)
+}
+
 function cmdInstallService(): void {
   const plistDir = path.join(os.homedir(), 'Library/LaunchAgents')
   const plistFile = path.join(plistDir, 'com.im2cc.daemon.plist')
@@ -1438,8 +1523,11 @@ function cmdInstallService(): void {
   if (!fs.existsSync(plistDir)) fs.mkdirSync(plistDir, { recursive: true })
   fs.writeFileSync(plistFile, plist)
   console.log(`✅ LaunchAgent 已安装: ${plistFile}`)
+  console.log(`   ProgramArguments 指向: ${mainModule}`)
   console.log('   加载: launchctl load ' + plistFile)
   console.log('   卸载: launchctl unload ' + plistFile)
+  console.log('')
+  console.log('   如果将来切换了安装模式（npm ↔ git clone），请重新运行 im2cc install-service')
 }
 
 function cmdDoctor(): void {

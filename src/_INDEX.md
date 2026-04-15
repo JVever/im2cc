@@ -14,7 +14,8 @@ im2cc 核心业务逻辑：IM 消息接收 → 命令路由 → 本地 AI coding
 - claude-launcher.ts：Claude 本地启动器覆盖（可选 launcher 解析、profile 选择、环境变量透传）
 - tool-cli-args.ts：各工具交互式 CLI 参数映射（tmux create/resume + resume hint）
 - tool-compat.ts：工具 CLI 可选能力探测（例如 Claude 是否支持 `--name`）
-- upgrade.ts：升级辅助逻辑（定位安装根目录、公开源码包升级辅助）
+- upgrade.ts：安装模式识别（detectInstallRoot + InstallMode: npm-global / git-checkout / tarball / unknown），供 `im2cc update` 路由
+- shell-install.ts：shell rc 文件（.zshrc/.bashrc）的 im2cc 薄包装函数注入逻辑：marker 对、清理历史行、幂等替换；核心计算是纯函数，便于测试
 - session.ts：Session 绑定 CRUD、原子写、消息去重
 - anti-pomodoro.ts：反茄钟状态机（waiting/work/rest 三态、休息期单次后台指令额度、延迟结果队列、daemon 同步与失败重试）
 - message-format.ts：统一结构化出站消息抽象（系统回复识别、飞书 post 渲染、微信纯文本降级）
