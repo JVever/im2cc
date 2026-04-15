@@ -99,7 +99,17 @@ npm publish
 3. maintainer 在浏览器登录 npmjs.com，点 "Authorize"
 4. 本地 npm 进程自动收到 token，继续完成 publish
 
-**AI 助手不要代跑 `npm publish`**。原因：在非交互子进程里 npm 会把 URL 中的 UUID 脱敏成 `***`（见实测），AI 无法把真实 URL 贴给 maintainer，反而制造困惑。正确做法是直接请 maintainer 在自己终端跑 `npm publish`，publish 完成后再走 Step 6 验证。
+**AI 助手不要代跑 `npm publish`，也不要建议用 `! npm publish` 前缀**。
+
+实测原因（npm 11.12.1 + auth-type=web）：
+- npm 检测 stdout.isTTY。非 TTY → 打印脱敏 URL（UUID 替换成 `***`），直接 `EOTP` 退出，不阻塞等待授权
+- debug log（`~/.npm/_logs/*.log`）也脱敏，**拿不到真实 URL**
+- Claude Code 的 `!` 前缀 / 后台 Bash / 任何 AI 代跑的子进程**都不是真 TTY**
+
+**唯一可行的做法**：maintainer 手动打开 iTerm / Terminal / 任意独立终端窗口，`cd` 到项目目录后跑 `npm publish`。npm 会：
+1. 自动打开浏览器到 `https://www.npmjs.com/auth/cli/<真实 uuid>`
+2. **阻塞**等待授权
+3. maintainer 在浏览器点 "Authorize" 后，命令自动继续完成 publish
 
 如果 maintainer 没有交互式终端（远程 CI 等场景），改用 `npm token create` 提前生成长期 token，通过 `NPM_TOKEN` 环境变量 + `.npmrc` 的 `//registry.npmjs.org/:_authToken=${NPM_TOKEN}` 发布。本仓库目前不走 CI 发布路径。
 
