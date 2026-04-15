@@ -504,7 +504,7 @@ export async function startDaemon(): Promise<void> {
           if (queueDelayedReply(conversationId, reply)) return
           await send(reply)
         },
-        config.defaultTimeoutSeconds,
+        { idleSeconds: config.defaultIdleTimeoutSeconds, hardMaxSeconds: config.defaultHardMaxSeconds },
       )
     }
   }
@@ -554,7 +554,7 @@ export async function startDaemon(): Promise<void> {
       if (queueDelayedReply(conversationId, text)) return
       await sendByConversationId(conversationId, text)
     },
-    config.defaultTimeoutSeconds,
+    { idleSeconds: config.defaultIdleTimeoutSeconds, hardMaxSeconds: config.defaultHardMaxSeconds },
   )
 
   // 发送重启通知（仅飞书，微信不支持主动推送）
