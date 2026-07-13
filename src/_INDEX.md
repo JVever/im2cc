@@ -40,7 +40,7 @@ im2cc 核心业务逻辑：IM 消息接收 → 命令路由 → 本地 AI coding
 - discover.ts：扫描本地 Claude Code / Codex 对话，并处理 Codex 的 session 漂移同步（匹配 tmux pane 可见内容到真实 thread）；Claude 漂移同步 2026-04-17 下线，由 SessionStart hook 全权负责
 - recap.ts：上下文回顾（过滤 init 消息、格式化最近一轮对话、/fc 时按最多 3 条消息发送）
 - feishu.ts：飞书 REST 轮询适配器（per-chat 自适应退避：活跃 5s / 闲 5min 30s / 闲 30min 60s / 闲 2h 120s；文本/富文本发送、资源下载，并在 `open.feishu.cn` DNS 失败时自动回退到 `open.larksuite.com`）
-- wechat.ts：微信 ClawBot iLink 适配器（文本长轮询、结构化消息文本降级发送、绑定）；非文本消息（文件/图片/语音）当前不在支持范围，回复中性提示引导用户改用飞书
+- wechat.ts：微信 ClawBot iLink 适配器（文字与微信原生语音转写长轮询、结构化消息文本降级发送、绑定）；语音转写为空时明确提示重试，文件/图片/视频当前不在支持范围并引导用户改用飞书
 - poll-cursor.ts：轮询游标持久化（per-group 游标读写，原子文件操作）
 - file-staging.ts：文件暂存管理（inbox 目录、格式校验、TTL 清理、暂存队列；含 office 文档分类与旧格式升格目标解析 needsLegacyUpgrade）
 - office-upgrader.ts：旧格式 office 文档（doc/xls/ppt → docx/xlsx/pptx）经 LibreOffice headless 升格；mutex 串行 + 临时 user-profile 隔离 + 30s timeout

@@ -83,7 +83,7 @@ test('help and mode list surface aliases for mobile input', async () => {
   assert.match(helpOutput, /\/fqon\s+— 开启反茄钟/)
   assert.match(helpOutput, /\/fqs\s+— 查看反茄钟状态/)
   assert.match(helpOutput, /飞书支持发送图片或文件；发送后再补一条指令即可让当前接入的 AI 工具分析/)
-  assert.match(helpOutput, /微信当前以纯文本对话为主/)
+  assert.match(helpOutput, /微信支持文字和微信原生语音转写/)
   assert.doesNotMatch(helpOutput, /\/fn <名称> <项目>/)
   assert.doesNotMatch(helpOutput, /\/fc <名称> <ID前缀>/)
 

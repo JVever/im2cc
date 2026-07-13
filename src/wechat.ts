@@ -75,7 +75,8 @@ function makeHeaders(botToken: string): Record<string, string> {
 interface ILinkMessageItem {
   type: number
   text_item?: { text: string }
-  voice_item?: { voice_text: string }
+  /** 微信侧完成语音识别后附带的转写文本；识别失败时可能为空或缺失 */
+  voice_item?: { text?: string }
 }
 
 interface ILinkMessage {
@@ -84,6 +85,29 @@ interface ILinkMessage {
   message_type: number
   context_token: string
   item_list?: ILinkMessageItem[]
+}
+
+interface ILinkTextInput {
+  source: 'text' | 'voice' | 'none'
+  text: string
+}
+
+/** 从 iLink item_list 提取可交给现有文字消息链路的输入。 */
+function extractTextInput(items: ILinkMessageItem[] | undefined): ILinkTextInput {
+  let sawVoiceItem = false
+
+  for (const item of items ?? []) {
+    const text = item.text_item?.text?.trim()
+    if (text) return { source: 'text', text }
+
+    if (item.voice_item) {
+      sawVoiceItem = true
+      const voiceText = item.voice_item.text?.trim()
+      if (voiceText) return { source: 'voice', text: voiceText }
+    }
+  }
+
+  return { source: sawVoiceItem ? 'voice' : 'none', text: '' }
 }
 
 export class WeChatAdapter implements TransportAdapter {
@@ -129,60 +153,7 @@ export class WeChatAdapter implements TransportAdapter {
           }
         }
 
-        for (const rawMsg of messages) {
-          // 非文本消息（含文件 / 图片 / 视频）→ 当前通道暂不支持，提示用户改用飞书
-          // 备注：完整 ClawBot iLink 文件接收（解析 file_message + CDN 下载 + AES-128-ECB 解密）
-          // 不在本 feature 范围；未来如要支持需单独评估，本处不做时间承诺。
-          if (rawMsg.message_type !== 1) {
-            log(`[wechat] 收到非文本消息 type=${rawMsg.message_type} from=${rawMsg.from_user_id}（当前通道不支持，已回复中性提示）`)
-            // 缓存 context_token 以便回复
-            if (rawMsg.context_token) {
-              this.contextTokens.set(rawMsg.from_user_id, {
-                token: rawMsg.context_token,
-                receivedAt: Date.now(),
-                useCount: 0,
-              })
-              saveContextTokens(this.contextTokens)
-            }
-            try {
-              await this.sendRawText(`wechat:${rawMsg.from_user_id}`,
-                '当前通道暂不支持文件、图片或语音传输。如需发送文档，请改用飞书。')
-            } catch (err) {
-              error(`[wechat] 提示非文本消息失败: ${err}`)
-            }
-            continue
-          }
-
-          // 从 item_list 中提取文本
-          const firstItem = rawMsg.item_list?.[0]
-          const text = firstItem?.text_item?.text || firstItem?.voice_item?.voice_text || ''
-          if (!text.trim()) continue
-
-          // 缓存 context_token（新消息 = 全新 token，重置计数和时间）
-          if (rawMsg.context_token) {
-            this.contextTokens.set(rawMsg.from_user_id, {
-              token: rawMsg.context_token,
-              receivedAt: Date.now(),
-              useCount: 0,
-            })
-            saveContextTokens(this.contextTokens)
-          }
-
-          const msg: IncomingMessage = {
-            messageId: String(rawMsg.message_id),
-            conversationId: `wechat:${rawMsg.from_user_id}`,
-            transport: 'wechat',
-            senderId: rawMsg.from_user_id,
-            kind: 'text',
-            text: text.trim(),
-          }
-
-          try {
-            await onMessage(msg)
-          } catch (err) {
-            error(`[wechat] 处理消息出错: ${err}`)
-          }
-        }
+        for (const rawMsg of messages) await this.handleRawMessage(rawMsg, onMessage)
       } catch (err) {
         if (String(err).includes('401') || String(err).includes('403')) {
           this.tokenValid = false
@@ -209,6 +180,69 @@ export class WeChatAdapter implements TransportAdapter {
 
     log('[wechat] 启动 iLink 长轮询')
     setTimeout(pollLoop, 100)
+  }
+
+  /** 处理一条原始 iLink 消息。独立成方法以便覆盖语音与失败路径的自动化测试。 */
+  private async handleRawMessage(
+    rawMsg: ILinkMessage,
+    onMessage: (msg: IncomingMessage) => Promise<void>,
+  ): Promise<void> {
+    // 新消息携带全新的 context_token；先缓存，确保所有提示路径都能回复。
+    if (rawMsg.context_token) {
+      this.contextTokens.set(rawMsg.from_user_id, {
+        token: rawMsg.context_token,
+        receivedAt: Date.now(),
+        useCount: 0,
+      })
+      saveContextTokens(this.contextTokens)
+    }
+
+    // 文件 / 图片 / 视频等消息当前不支持。语音属于 message_type=1，走下方转写文本入口。
+    if (rawMsg.message_type !== 1) {
+      log(`[wechat] 收到非文本消息 type=${rawMsg.message_type} from=${rawMsg.from_user_id}（当前通道不支持，已回复中性提示）`)
+      try {
+        await this.sendRawText(`wechat:${rawMsg.from_user_id}`,
+          '当前通道暂不支持文件、图片或视频传输。如需发送文档，请改用飞书。')
+      } catch (err) {
+        error(`[wechat] 提示非文本消息失败: ${err}`)
+      }
+      return
+    }
+
+    const input = extractTextInput(rawMsg.item_list)
+    if (!input.text) {
+      if (input.source === 'voice') {
+        log(`[wechat] 语音消息未包含转写文本 from=${rawMsg.from_user_id}，已提示用户重试`)
+        try {
+          await this.sendRawText(`wechat:${rawMsg.from_user_id}`,
+            '这条语音没有识别出文字，请重新录一条，或暂时改发文字。')
+        } catch (err) {
+          error(`[wechat] 提示语音转写失败: ${err}`)
+        }
+      } else {
+        log(`[wechat] message_type=1 但没有可处理的文本 from=${rawMsg.from_user_id}`)
+      }
+      return
+    }
+
+    if (input.source === 'voice') {
+      log(`[wechat] 语音转写已接收 from=${rawMsg.from_user_id} chars=${input.text.length}`)
+    }
+
+    const msg: IncomingMessage = {
+      messageId: String(rawMsg.message_id),
+      conversationId: `wechat:${rawMsg.from_user_id}`,
+      transport: 'wechat',
+      senderId: rawMsg.from_user_id,
+      kind: 'text',
+      text: input.text,
+    }
+
+    try {
+      await onMessage(msg)
+    } catch (err) {
+      error(`[wechat] 处理消息出错: ${err}`)
+    }
   }
 
   async sendText(conversationId: string, text: string): Promise<void> {
