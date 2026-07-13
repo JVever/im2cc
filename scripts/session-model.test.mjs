@@ -63,7 +63,7 @@ function writeCodexTurn(sessionId, modelId, timestamp, { complete = true, paddin
   }
 }
 
-test('Claude actual response locks the exact model ID and /fs distinguishes target from latest response', async () => {
+test('Claude actual response locks the exact model ID and /fs distinguishes current selection from recent actual use', async () => {
   resetState()
   const cwd = path.join(tempHome, 'Code/claude-project')
   const binding = createRegisteredBinding('claude-demo', 'claude', cwd, 'wechat-claude')
@@ -77,8 +77,8 @@ test('Claude actual response locks the exact model ID and /fs distinguishes targ
   assert.equal(registry.lookup('claude-demo')?.selectedModelId, 'claude-opus-5')
 
   const card = await status.buildSessionStatus(binding, { includeQuota: false })
-  assert.match(card, /接下来使用的模型：claude-opus-5/)
-  assert.match(card, /上次回复使用的模型：claude-sonnet-5/)
+  assert.match(card, /当前选择的模型：claude-opus-5/)
+  assert.match(card, /最近实际使用的模型：claude-sonnet-5/)
 })
 
 test('explicit default is not backfilled by an older response, then next successful response relocks', async () => {
@@ -90,8 +90,8 @@ test('explicit default is not backfilled by an older response, then next success
 
   assert.equal(sessionModel.getSelectedModelForBinding(binding), undefined)
   const defaultCard = await status.buildSessionStatus(binding, { includeQuota: false })
-  assert.match(defaultCard, /接下来使用的模型：工具默认模型/)
-  assert.match(defaultCard, /上次回复使用的模型：claude-sonnet-5/)
+  assert.match(defaultCard, /当前选择的模型：工具默认模型/)
+  assert.match(defaultCard, /最近实际使用的模型：claude-sonnet-5/)
   const snapshot = sessionModel.getModelSelectionSnapshotForBinding(binding)
 
   writeClaudeAssistant(cwd, binding.sessionId, 'claude-opus-5', '2026-07-13T03:00:00.000Z')
@@ -195,7 +195,7 @@ test('Codex old completed turn cannot override a selection made after that turn 
   assert.equal(sessionModel.getSelectedModelForBinding(binding), 'gpt-5.7-new')
 })
 
-test('Codex reports the latest successfully completed turn context and labels it without claiming response metadata', async () => {
+test('Codex reports recent actual use from the latest successful turn without claiming response metadata', async () => {
   resetState()
   const cwd = path.join(tempHome, 'Code/codex-project')
   const binding = createRegisteredBinding('codex-demo', 'codex', cwd, 'wechat-codex')
@@ -207,8 +207,8 @@ test('Codex reports the latest successfully completed turn context and labels it
   assert.deepEqual(observed, { id: 'gpt-5.6-sol', observedAt: '2026-07-13T04:00:00.000Z' })
   assert.equal(sessionModel.getSelectedModelForBinding(binding), 'gpt-5.6-sol')
   const card = await status.buildSessionStatus(binding, { includeQuota: false })
-  assert.match(card, /上次成功执行的模型：gpt-5\.6-sol/)
-  assert.doesNotMatch(card, /上次回复使用的模型/)
+  assert.match(card, /最近实际使用的模型：gpt-5\.6-sol/)
+  assert.doesNotMatch(card, /接下来使用的模型|上次回复使用的模型|上次成功执行的模型/)
 
   // Codex 的条件校正只声称成功 turn context；仍需遵守 selection watermark CAS。
   registry.updateSelectedModel('codex-demo', 'gpt-5.7-target', '2026-07-13T06:00:00.000Z')

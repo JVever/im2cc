@@ -181,7 +181,7 @@ Gemini 不再接受新功能开发，仅维持现有功能可用。原因：Gemi
 - registry 保存工具实际可执行的完整 `selectedModelId`，不以 `opus` 等会漂移的家族 alias 作为持久化真相
 - registry 是最后一道精确 ID 门禁：Claude 已知家族 alias（含 `opus-4.8` 这类版本短名）必须先经 model catalog 映射为完整 ID，无法映射则拒绝；Fable 等自定义 provider 的原生完整 ID 不要求 `claude-` 前缀
 - Terminal 与 IM 的模型切换都写同一个 Session 字段；queue 远程 turn 与 Terminal resume 都从该字段取值
-- `/fs` 用时间关系区分两类事实：“接下来使用的模型”来自 registry；Claude 的“上次回复使用的模型”来自 assistant 响应，Codex 的“上次成功执行的模型”仅来自成功 turn 的有效 `turn_context.model`。不得把 Codex 上下文冒充 provider 响应模型
+- `/fs` 用状态角色而非“下一次 / 上一次”的伪时间轴区分两类事实：“当前选择的模型”来自 registry，表示 Session 持续生效的设置；“最近实际使用的模型”来自工具可验证的最近一次成功事实。Claude 以 assistant 响应模型为证据，Codex 仅以成功 turn 的有效 `turn_context.model` 为证据；不得把 Codex 上下文冒充 provider 响应 metadata
 - binding 中历史 `modelOverride` 只允许作为迁移 fallback，不再接受新写入
 - 底层 sessionId 因 `/clear` 等轮换时，命名 Session 的模型选择保留
 - 已开始的 turn 同时快照模型 ID、`modelSelectionUpdatedAt` 与启动前的最近工具事实 identity；成功后仅当 watermark 未变且出现了不同于 baseline 的新事实时，才 compare-and-set 校正。后到切换只影响下一 turn，也不得被旧 turn 的较晚完成时间或后续无新事实操作覆盖

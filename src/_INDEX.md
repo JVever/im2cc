@@ -34,7 +34,7 @@ im2cc 核心业务逻辑：IM 消息接收 → 命令路由 → 本地 AI coding
 - schedule-parser.ts：/at /in /cron 表达式解析（自实现 5 段 cron，无外部依赖）；返回绝对时间戳 nextFireAt 与剩余消息体
 - schedule-store.ts：~/.im2cc/data/schedules.json 原子读写；name 主键 upsert 唯一约束
 - scheduler.ts：定时消息调度核心 — 内存 timer + 持久化、daemon 重启零漂移、错过窗口处理；在线走 queue，无绑定时 driver 直调也按模型 + watermark + observed baseline 快照继承，并只用本次新增事实条件校正
-- status.ts：会话状态面板构建（/fs 和 /fc 共用），用“接下来使用 / 上次回复或执行”分列 Session 目标模型与工具可验证的成功模型事实，并展示 context token、git 分支、Anthropic 配额
+- status.ts：会话状态面板构建（/fs 和 /fc 共用），用“当前选择的模型 / 最近实际使用的模型”分列 Session 持续生效的设置与工具可验证的成功事实，并展示 context token、git 分支、Anthropic 配额
 - output.ts：stream-json 事件 → 飞书消息文本格式化
 - registry.ts：命名 Session 注册表（永久寻址 + 精确模型 ID 门禁 + 跨进程写锁 + selectedModelId/modelSelectionUpdatedAt 跨端模型真值 + turn 完成 CAS）
 - discover.ts：扫描本地 Claude Code / Codex 对话，并处理 Codex 的 session 漂移同步（匹配 tmux pane 可见内容到真实 thread）；Claude 漂移同步 2026-04-17 下线，由 SessionStart hook 全权负责

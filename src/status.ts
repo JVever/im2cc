@@ -1,6 +1,6 @@
 /**
  * @input:    Binding, RegisteredSession 精确模型状态, Claude/Codex session files, macOS Keychain (OAuth), git
- * @output:   buildSessionStatus() — 构建会话状态面板（/fs 和 /fc 共用；用“接下来 / 上次”区分目标模型与最近成功事实）
+ * @output:   buildSessionStatus() — 构建会话状态面板（/fs 和 /fc 共用；用“当前选择 / 最近实际使用”区分 Session 设置与最近成功事实）
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -341,9 +341,8 @@ export async function buildSessionStatus(
   // ❺ Session 模型真值与工具可验证的最近成功模型状态（完整 ID，不缩写）。
   // Claude session 文件含 assistant.model；Codex 目前只含成功 turn 的 turn_context.model。
   lines.push(SEP)
-  lines.push(`接下来使用的模型：${selectedModelId ?? '工具默认模型'}`)
-  const observedModelLabel = tool === 'codex' ? '上次成功执行的模型' : '上次回复使用的模型'
-  lines.push(`${observedModelLabel}：${latestObservedModel?.id ?? '暂无记录'}`)
+  lines.push(`当前选择的模型：${selectedModelId ?? '工具默认模型'}`)
+  lines.push(`最近实际使用的模型：${latestObservedModel?.id ?? '暂无记录'}`)
 
   // ❻ 上下文
   if (contextInfo) {
