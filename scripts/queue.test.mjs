@@ -13,6 +13,8 @@ process.env.HOME = testHome
 const queue = await import(path.join(rootDir, 'dist', 'src', 'queue.js'))
 const session = await import(path.join(rootDir, 'dist', 'src', 'session.js'))
 const tools = await import(path.join(rootDir, 'dist', 'src', 'tool-driver.js'))
+const registry = await import(path.join(rootDir, 'dist', 'src', 'registry.js'))
+const discover = await import(path.join(rootDir, 'dist', 'src', 'discover.js'))
 
 function resetState() {
   fs.rmSync(path.join(testHome, '.im2cc'), { recursive: true, force: true })
@@ -40,13 +42,88 @@ class FakeClaudeDriver {
   async interrupt() {}
 
   async sendMessage(_sessionId, _message, _cwd, _permissionMode, opts) {
+    this.lastModelOverride = opts?.modelOverride
     setTimeout(() => { opts?.onTurnText?.('stream reply') }, 20)
     await wait(60)
+    if (this.beforeReturn) await this.beforeReturn({ sessionId: _sessionId, cwd: _cwd, opts })
     return 'final reply'
   }
 }
 
-tools.registerDriver(new FakeClaudeDriver())
+const fakeDriver = new FakeClaudeDriver()
+tools.registerDriver(fakeDriver)
+
+test('queue snapshots the named Session exact model instead of binding.modelOverride', { concurrency: false }, async () => {
+  resetState()
+  registry.register('model-demo', 'session-model', '/tmp', 'claude')
+  registry.updateSelectedModel('model-demo', 'claude-opus-5')
+  session.createBinding('conv-model', 'session-model', '/tmp', 'YOLO', 'test-cli', 'wechat', 'claude')
+  session.updateBinding('conv-model', { modelOverride: 'claude-sonnet-4-6' })
+
+  queue.enqueue('conv-model', 'use selected model', async () => {})
+  await wait(120)
+
+  assert.equal(fakeDriver.lastModelOverride, 'claude-opus-5')
+})
+
+test('a completed old turn cannot overwrite a model selected while that turn was running', { concurrency: false }, async () => {
+  resetState()
+  const cwd = path.join(testHome, 'Code/model-race')
+  fs.mkdirSync(cwd, { recursive: true })
+  registry.register('model-race', 'session-model-race', cwd, 'claude')
+  registry.updateSelectedModel('model-race', 'claude-opus-5', '2026-07-13T01:00:00.000Z')
+  session.createBinding('conv-model-race', 'session-model-race', cwd, 'YOLO', 'test-cli', 'wechat', 'claude')
+
+  fakeDriver.beforeReturn = async ({ sessionId }) => {
+    // turn A 已经以 Opus 启动；执行中用户为下一 turn 选择 Sonnet。
+    registry.updateSelectedModel('model-race', 'claude-sonnet-5', '2026-07-13T02:00:00.000Z')
+    const transcriptDir = path.join(testHome, '.claude/projects', discover.pathToSlug(cwd))
+    fs.mkdirSync(transcriptDir, { recursive: true })
+    fs.writeFileSync(path.join(transcriptDir, `${sessionId}.jsonl`), JSON.stringify({
+      type: 'assistant',
+      timestamp: '2026-07-13T03:00:00.000Z',
+      message: { model: 'claude-opus-5', content: [] },
+    }) + '\n')
+  }
+
+  try {
+    queue.enqueue('conv-model-race', 'finish old turn', async () => {})
+    await wait(140)
+    assert.equal(fakeDriver.lastModelOverride, 'claude-opus-5')
+    assert.equal(registry.lookup('model-race')?.selectedModelId, 'claude-sonnet-5')
+
+    // 下一 turn 必须自动继承执行期间产生的新选择。
+    fakeDriver.beforeReturn = undefined
+    queue.enqueue('conv-model-race', 'start next turn', async () => {})
+    await wait(120)
+    assert.equal(fakeDriver.lastModelOverride, 'claude-sonnet-5')
+  } finally {
+    fakeDriver.beforeReturn = undefined
+  }
+})
+
+test('a successful turn with no new model fact cannot reuse the observed baseline', { concurrency: false }, async () => {
+  resetState()
+  const cwd = path.join(testHome, 'Code/model-baseline')
+  fs.mkdirSync(cwd, { recursive: true })
+  registry.register('model-baseline', 'session-model-baseline', cwd, 'claude')
+  registry.updateSelectedModel('model-baseline', 'claude-sonnet-new', '2026-07-13T02:00:00.000Z')
+  session.createBinding('conv-model-baseline', 'session-model-baseline', cwd, 'YOLO', 'test-cli', 'wechat', 'claude')
+
+  // 这条旧 Opus assistant 已在本 turn 启动前存在；fake driver 成功但不写新 assistant。
+  const transcriptDir = path.join(testHome, '.claude/projects', discover.pathToSlug(cwd))
+  fs.mkdirSync(transcriptDir, { recursive: true })
+  fs.writeFileSync(path.join(transcriptDir, 'session-model-baseline.jsonl'), JSON.stringify({
+    type: 'assistant',
+    timestamp: '2026-07-13T03:00:00.000Z',
+    message: { model: 'claude-opus-stale', content: [] },
+  }) + '\n')
+
+  queue.enqueue('conv-model-baseline', 'no new assistant fact', async () => {})
+  await wait(120)
+  assert.equal(fakeDriver.lastModelOverride, 'claude-sonnet-new')
+  assert.equal(registry.lookup('model-baseline')?.selectedModelId, 'claude-sonnet-new')
+})
 
 test('queue drops streamed and final replies after remote binding is archived', { concurrency: false }, async () => {
   resetState()

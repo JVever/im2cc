@@ -238,7 +238,7 @@ im2cc doctor
 
 | 命令 | 作用 | Claude | Codex | Gemini | 用法示例 |
 |------|------|:------:|:-----:|:------:|----------|
-| `/clear` | 轮换 sessionId（开干净的新一轮），并重置 `/model` 覆盖 | ✅ | ✅ | ❌ | `/clear` |
+| `/clear` | 轮换 sessionId（开干净的新一轮），并保留 Session 已选模型 | ✅ | ✅ | ❌ | `/clear` |
 | `/compact` | 压缩当前对话上下文（仅 Claude，daemon 真透传 `/compact`） | ✅ | ❌ | ❌ | `/compact` |
 | `/model` | 列出可选模型，回复编号切换；下条消息生效 | ✅ | ✅ | ❌ | `/model` 然后回 `2` |
 | `/btw <问题>` | 旁路 side 讨论：基于主对话上下文问答，不污染主 session，AI 只能读不能写 | ✅ | ❌ | ❌ | `/btw 刚才说的那个 SQL 怎么调优?` |

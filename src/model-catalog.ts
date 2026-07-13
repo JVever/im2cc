@@ -1,12 +1,13 @@
 /**
  * @input:    ToolId, Im2ccConfig.modelCatalogs（可选用户覆盖）
- * @output:   ModelOption[], BUILTIN_MODEL_CATALOG, getModelCatalog(), resolveModelInput(), findShortNameByFullName() — /model 候选清单 + 短名映射；双轨：内置默认 + ~/.im2cc/config.json 用户覆盖
+ * @output:   ModelOption[], BUILTIN_MODEL_CATALOG, getModelCatalog(), resolveModelInput(), findShortNameByFullName() — 只含精确 fullName 的 /model 候选清单 + 短名映射；双轨：内置默认 + ~/.im2cc/config.json 用户覆盖
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
 import type { ToolId } from './tool-driver.js'
 import { loadConfig } from './config.js'
 import { log } from './logger.js'
+import { normalizeExactModelId } from './model-id.js'
 
 export interface ModelOption {
   /** 用户在 IM 中输入的短名（如 opus-4.7）；展示在列表中 */
@@ -37,13 +38,15 @@ export const BUILTIN_MODEL_CATALOG: Record<'claude' | 'codex', ModelOption[]> = 
   ],
 }
 
-/** 单条目最小校验：三字段都是非空 string */
-function isValidModelOption(x: unknown): x is ModelOption {
-  if (!x || typeof x !== 'object') return false
+/** 单条目校验并归一：三字段 trim 后非空，fullName 必须是精确 ID。 */
+function normalizeModelOption(tool: ToolId, x: unknown): ModelOption | null {
+  if (!x || typeof x !== 'object') return null
   const o = x as Record<string, unknown>
-  return typeof o.shortName === 'string' && o.shortName.length > 0
-    && typeof o.fullName === 'string' && o.fullName.length > 0
-    && typeof o.description === 'string'
+  const shortName = typeof o.shortName === 'string' ? o.shortName.trim() : ''
+  const fullName = normalizeExactModelId(tool, o.fullName)
+  const description = typeof o.description === 'string' ? o.description.trim() : ''
+  if (!shortName || !fullName || !description) return null
+  return { shortName, fullName, description }
 }
 
 /**
@@ -62,7 +65,9 @@ export function getModelCatalog(tool: ToolId): ModelOption[] {
     const config = loadConfig()
     const userCatalog = config.modelCatalogs?.[tool]
     if (Array.isArray(userCatalog) && userCatalog.length > 0) {
-      const filtered = userCatalog.filter(isValidModelOption) as ModelOption[]
+      const filtered = userCatalog
+        .map(item => normalizeModelOption(tool, item))
+        .filter((item): item is ModelOption => item !== null)
       if (filtered.length === 0) {
         log(`[model-catalog] config.modelCatalogs.${tool} 全部条目无效，fallback 到内置默认`)
       } else {
@@ -80,38 +85,37 @@ export function getModelCatalog(tool: ToolId): ModelOption[] {
 }
 
 /**
- * 把用户输入解析为完整模型名。三轨：
+ * 把用户输入解析为清单中登记的模型：
  *   1. 短名命中（如 'opus-4.7'）→ 返回对应 fullName
- *   2. 完整名命中（如 'claude-opus-4-7'）→ 原样返回 + matched=true
- *   3. 任意字符串 → 原样返回 + matched=false（让用户能输自定义/未来模型）
+ *   2. 完整名命中（如 'claude-opus-4-7'）→ 返回同一清单项
+ *   3. 未登记输入 → null（避免先回成功、下一 turn 才失败）
  *
- * @returns { fullName, shortName?, matched } — shortName 仅在 matched 时填，供回执显示
+ * 未来 / 自定义模型先写入 config.modelCatalogs，再从这条确定性路径选择。
  */
-export function resolveModelInput(tool: ToolId, raw: string): { fullName: string; shortName?: string; matched: boolean } {
+export function resolveModelInput(tool: ToolId, raw: string): ModelOption | null {
   const catalog = getModelCatalog(tool)
   const trimmed = raw.trim()
 
   // 短名匹配
   for (const opt of catalog) {
     if (opt.shortName === trimmed) {
-      return { fullName: opt.fullName, shortName: opt.shortName, matched: true }
+      return opt
     }
   }
 
   // 完整名匹配
   for (const opt of catalog) {
     if (opt.fullName === trimmed) {
-      return { fullName: opt.fullName, shortName: opt.shortName, matched: true }
+      return opt
     }
   }
 
-  // 自由输入
-  return { fullName: trimmed, matched: false }
+  return null
 }
 
 /**
- * 根据 binding 当前 modelOverride（完整名），找到对应的短名（用于回执显示）。
- * 不在清单中时返回 modelOverride 原文。undefined modelOverride 返回 undefined。
+ * 根据 Session 当前完整模型 ID 找到短名（用于回执显示）。
+ * 不在清单中时返回完整 ID 原文；undefined 返回 undefined。
  */
 export function findShortNameByFullName(tool: ToolId, fullName: string | undefined): string | undefined {
   if (!fullName) return undefined

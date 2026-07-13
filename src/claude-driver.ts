@@ -1,6 +1,6 @@
 /**
- * @input:    Claude Code CLI (`claude` 命令), session ID, 用户消息
- * @output:   ClaudeDriver (ToolDriver 实现) + 兼容导出 — Claude Code 生命周期管理
+ * @input:    Claude Code CLI (`claude` 命令), session ID, Session 精确模型, 用户消息
+ * @output:   ClaudeDriver (ToolDriver 实现) + 兼容导出 — Claude Code 生命周期管理（创建/发送显式继承模型）
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -66,10 +66,11 @@ export class ClaudeDriver extends BaseToolDriver {
       buildClaudeLauncherEnv({ phase: 'create', sessionId, sessionName: name, profile: opts?.claudeProfile }),
       askUser?.env,
     )
+    const modelArgs = opts?.selectedModelId ? ['--model', opts.selectedModelId] : []
     const output = await this.runTool({
       cmd: getClaudeLauncher(),
       message: '会话已建立。请回复"就绪"。',
-      args: ['-p', '会话已建立。请回复"就绪"。', '--session-id', sessionId, ...claudeSessionNameArgs(name), ...settingsArgs, '--output-format', 'stream-json', '--verbose', ...permissionArgs(permissionMode)],
+      args: ['-p', '会话已建立。请回复"就绪"。', '--session-id', sessionId, ...claudeSessionNameArgs(name), ...settingsArgs, ...modelArgs, '--output-format', 'stream-json', '--verbose', ...permissionArgs(permissionMode)],
       cwd,
       env,
     })

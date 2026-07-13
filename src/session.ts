@@ -1,5 +1,5 @@
 /**
- * @input:    ~/.im2cc/data/bindings.json, Binding 数据结构（含 /model 写入的 modelOverride）
+ * @input:    ~/.im2cc/data/bindings.json, Binding 数据结构（modelOverride 仅作旧数据迁移输入）
  * @output:   createBinding(), getBinding(), updateBinding(), archiveBinding(), listActiveBindings(), isDuplicate() — 会话绑定与跨进程消息去重
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
@@ -24,7 +24,7 @@ export interface Binding {
   createdAt: string
   lastActiveAt: string
   archived: boolean
-  /** /model 命令设置的 per-session 模型覆盖；undefined = 用工具默认；/clear 重置为 undefined */
+  /** @deprecated 旧版 /model 存量；读取后迁移到 RegisteredSession.selectedModelId，不再写入。 */
   modelOverride?: string
 }
 

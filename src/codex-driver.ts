@@ -1,6 +1,6 @@
 /**
- * @input:    Codex CLI (`codex` 命令), session ID, 用户消息
- * @output:   CodexDriver (ToolDriver 实现) — OpenAI Codex CLI 驱动
+ * @input:    Codex CLI (`codex` 命令), session ID, Session 精确模型, 用户消息
+ * @output:   CodexDriver (ToolDriver 实现) — OpenAI Codex CLI 驱动（创建/发送显式继承模型）
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -26,10 +26,11 @@ export class CodexDriver extends BaseToolDriver {
 
   async createSession(cwd: string, permissionMode: string, _name?: string, _opts?: CreateSessionOptions): Promise<CreateSessionResult> {
     let sessionId: string | null = null
+    const modelArgs = _opts?.selectedModelId ? ['-m', _opts.selectedModelId] : []
     const output = await this.runTool({
       cmd: 'codex',
       message: '会话已建立。',
-      args: ['exec', '--json', '--skip-git-repo-check', ...codexPermArgs(permissionMode), '会话已建立。请回复"就绪"。'],
+      args: ['exec', '--json', '--skip-git-repo-check', ...modelArgs, ...codexPermArgs(permissionMode), '会话已建立。请回复"就绪"。'],
       cwd,
       onEvent: (event) => {
         if (event.type === 'thread.started' && typeof event.thread_id === 'string') {

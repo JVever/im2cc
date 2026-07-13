@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * @input:    CLI 参数 (start/stop/status/logs/sessions/new/connect/list/delete/detach/show/setup/secure/onboard/install-service/doctor/help/update/wechat/fqon/fqoff/fqs)
- * @output:   守护进程管理 + 完整 session 管理命令（new/connect/list/delete/detach/show；connect 含桌面接回保护态，list 输出按对话位置聚合）
+ * @output:   守护进程 + session 管理命令；connect 精确模型交接；install-hook 安全串接 Session/statusline observer
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { execSync, execFileSync, spawn } from 'node:child_process'
-import { loadConfig, saveConfig, configExists, getPidFile, getDaemonLockDir, getLogDir, getConfigDir, loadWeChatAccount, saveWeChatAccount, getWeChatAccountFile, type Im2ccConfig } from '../src/config.js'
+import { loadConfig, saveConfig, configExists, getPidFile, getDaemonLockDir, getLogDir, getConfigDir, getDataDir, loadWeChatAccount, saveWeChatAccount, getWeChatAccountFile, type Im2ccConfig } from '../src/config.js'
 import { listActiveBindings, archiveBinding } from '../src/session.js'
 import { getClaudeVersion } from '../src/claude-driver.js'
 import { register, registerWithMeta, lookup, listRegistered, remove } from '../src/registry.js'
@@ -25,6 +25,7 @@ import { IM2CC_SHELL_FUNCTIONS, SHELL_MARKER_END, SHELL_MARKER_START, writeShell
 import { hasCustomClaudeLauncher, selectClaudeProfile } from '../src/claude-launcher.js'
 import { disableAntiPomodoro, enableAntiPomodoro, formatAntiPomodoroStatus, getAntiPomodoroSnapshot } from '../src/anti-pomodoro.js'
 import { interruptInflightTasksForSession, listCompletedInflightSnapshotsForSession, listInflightTasksForSession, type CompletedInflightSnapshot, type InflightTaskSnapshot } from '../src/queue.js'
+import { needsInteractiveModelRestart } from '../src/session-model.js'
 import readline from 'node:readline'
 import { tmuxExactTarget } from '../src/tmux-util.js'
 
@@ -236,7 +237,7 @@ switch (command) {
   运维:
   sessions           列出活跃绑定
   install-shell      写入终端快捷命令（fn/fc/fl 等）
-  install-hook       写入 Claude Code session 同步 hook
+  install-hook       写入 Claude Code session + 精确模型同步 hook
   install-service    安装 macOS 开机自启
   doctor             检查环境
   fqon               开启反茄钟
@@ -1022,11 +1023,28 @@ async function cmdConnect(): Promise<void> {
     oldFormatExists,
   })
   if (tmux) {
-    fcTraceLog('fc.branch.attach_existing', { sessionName: session.name, tmuxSession: tmux })
-    console.log(`接入 "${session.name}" (活跃)`)
-    tmuxConnect(tmux)
-    fcTraceLog('fc.connect_returned', { tmuxSession: tmux, tmuxEnv: process.env.TMUX ?? null })
-    return
+    if (!needsInteractiveModelRestart(session)) {
+      fcTraceLog('fc.branch.attach_existing', { sessionName: session.name, tmuxSession: tmux })
+      console.log(`接入 "${session.name}" (活跃)`)
+      tmuxConnect(tmux)
+      fcTraceLog('fc.connect_returned', { tmuxSession: tmux, tmuxEnv: process.env.TMUX ?? null })
+      return
+    }
+
+    // IM 选择与现存 TUI 实际模型不同：仅重新 attach 无法给已运行进程补 --model/-m，
+    // 因而先结束 TUI，再从同一 sessionId 精确 resume。fc 是用户主动交接点，历史不会丢失。
+    fcTraceLog('fc.branch.restart_for_model', {
+      sessionName: session.name,
+      tmuxSession: tmux,
+      selectedModelId: session.selectedModelId ?? null,
+    })
+    console.log(`同步 Session 模型后接入 "${session.name}"...`)
+    try {
+      execFileSync('tmux', ['kill-session', '-t', tmuxExactTarget(tmux)], { stdio: 'ignore' })
+    } catch {
+      // tmux 可能恰好已由用户退出；继续按同一 sessionId resume 即可。
+      fcTraceLog('fc.restart_for_model.kill_race', { sessionName: session.name, tmuxSession: tmux })
+    }
   }
 
   // tmux session 不存在，重新创建
@@ -1043,8 +1061,16 @@ async function cmdConnect(): Promise<void> {
   // 从 registry 读 permissionMode；保持 mode 一致（IM 端切过的 mode 在电脑端也生效）
   const permissionMode = session.permissionMode
   const cmdArgs = status === 'here'
-    ? toolResumeArgs(tool as ToolId, session.sessionId, session.name, { claudeProfile: session.claudeProfile, permissionMode })
-    : toolCreateArgs(tool as ToolId, session.sessionId, session.name, { claudeProfile: session.claudeProfile, permissionMode })
+    ? toolResumeArgs(tool as ToolId, session.sessionId, session.name, {
+        claudeProfile: session.claudeProfile,
+        permissionMode,
+        selectedModelId: session.selectedModelId,
+      })
+    : toolCreateArgs(tool as ToolId, session.sessionId, session.name, {
+        claudeProfile: session.claudeProfile,
+        permissionMode,
+        selectedModelId: session.selectedModelId,
+      })
 
   fcTraceLog('fc.branch.new_create', {
     sessionName: session.name,
@@ -1486,21 +1512,31 @@ function resolvePackagedHookScript(): string {
   return path.resolve(import.meta.dirname, '../../shell/im2cc-session-sync.sh')
 }
 
+function resolvePackagedModelStatuslineScript(): string {
+  return path.resolve(import.meta.dirname, '../../shell/im2cc-model-statusline.sh')
+}
+
 function cmdInstallHook(): void {
   const hookScript = resolvePackagedHookScript()
-  if (!fs.existsSync(hookScript)) {
-    console.log(`❌ 找不到 session-sync hook 脚本: ${hookScript}`)
+  const modelStatuslineScript = resolvePackagedModelStatuslineScript()
+  if (!fs.existsSync(hookScript) || !fs.existsSync(modelStatuslineScript)) {
+    console.log(`❌ 找不到 Claude 同步脚本: ${!fs.existsSync(hookScript) ? hookScript : modelStatuslineScript}`)
     console.log('   这通常意味着 im2cc 安装不完整，建议重新运行 npm i -g im2cc')
     process.exit(1)
   }
   try { fs.chmodSync(hookScript, 0o755) } catch {}
+  try { fs.chmodSync(modelStatuslineScript, 0o755) } catch {}
 
   const settingsPath = path.join(os.homedir(), '.claude/settings.json')
   const settingsDir = path.dirname(settingsPath)
   if (!fs.existsSync(settingsDir)) fs.mkdirSync(settingsDir, { recursive: true })
 
   type HookEntry = { matcher?: string; hooks?: Array<{ type?: string; command?: string }>; type?: string; command?: string }
-  type Settings = { hooks?: { SessionStart?: HookEntry[] } & Record<string, HookEntry[]> } & Record<string, unknown>
+  type StatusLine = { type?: string; command?: string } & Record<string, unknown>
+  type Settings = {
+    hooks?: { SessionStart?: HookEntry[] } & Record<string, HookEntry[]>
+    statusLine?: StatusLine
+  } & Record<string, unknown>
 
   let settings: Settings = {}
   if (fs.existsSync(settingsPath)) {
@@ -1538,10 +1574,52 @@ function cmdInstallHook(): void {
   }
   settings.hooks.SessionStart = rebuilt
 
+  // statusline 是 Claude 当前模型在“尚未回复前”唯一可观测的运行态入口。
+  // 把既有 HUD / Vibe Island 命令保存为 next，im2cc wrapper 只旁路观察并原样转发 stdin/stdout。
+  const dataDir = getDataDir()
+  const nextCommandFile = path.join(dataDir, 'statusline-next-command')
+  const fallbackCommandFile = path.join(dataDir, 'statusline-fallback-command')
+  const currentStatuslineCommand = typeof settings.statusLine?.command === 'string'
+    ? settings.statusLine.command.trim()
+    : ''
+  const isModelObserverCommand = (command: string): boolean => command.includes('im2cc-model-statusline.sh')
+
+  if (!isModelObserverCommand(currentStatuslineCommand)) {
+    fs.writeFileSync(nextCommandFile, currentStatuslineCommand, { mode: 0o600 })
+
+    let fallbackCommand = currentStatuslineCommand
+    if (currentStatuslineCommand.includes('vibe-island-statusline-chain')) {
+      const vibeLeaf = path.join(os.homedir(), '.vibe-island/cache/statusline-chain-original-command')
+      try {
+        const leaf = fs.readFileSync(vibeLeaf, 'utf-8').trim()
+        if (leaf && !isModelObserverCommand(leaf) && !leaf.includes('vibe-island-statusline-chain')) {
+          fallbackCommand = leaf
+        } else if (isModelObserverCommand(leaf)) {
+          // 第三方在两次 install-hook 之间重装时，Vibe 的 leaf 可能已经回指 observer。
+          // 此时不能把 Vibe 自己写成 fallback，否则 observer → Vibe → observer 会闭环。
+          try {
+            const previousFallback = fs.readFileSync(fallbackCommandFile, 'utf-8').trim()
+            fallbackCommand = previousFallback
+              && !isModelObserverCommand(previousFallback)
+              && !previousFallback.includes('vibe-island-statusline-chain')
+              ? previousFallback
+              : ''
+          } catch {
+            fallbackCommand = ''
+          }
+        }
+      } catch { /* 保留当前命令作为递归兜底 */ }
+    }
+    fs.writeFileSync(fallbackCommandFile, fallbackCommand, { mode: 0o600 })
+  }
+
+  settings.statusLine = { type: 'command', command: modelStatuslineScript }
+
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2))
-  console.log(`✅ Claude session-sync hook 已配置`)
-  console.log(`   hook 脚本: ${hookScript}`)
-  console.log(`   settings : ${settingsPath}`)
+  console.log(`✅ Claude session + 精确模型同步已配置`)
+  console.log(`   session hook : ${hookScript}`)
+  console.log(`   model observer: ${modelStatuslineScript}`)
+  console.log(`   settings     : ${settingsPath}`)
 }
 
 function cmdInstallService(): void {

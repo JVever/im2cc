@@ -1,6 +1,6 @@
 /**
- * @input:    schedule-store 持久化数据, registry/session/queue/driver/transport
- * @output:   initScheduler(), addSchedule(), cancelScheduleByName(), getScheduleByName(), formatScheduleStatus() — 定时消息调度核心：内存 timer + 持久化、daemon 重启零漂移、错过窗口处理（at/in 仍触发，cron 跳过）
+ * @input:    schedule-store 持久化数据, registry Session 模型 ID + selection watermark, 原生模型 observed baseline, session/queue/driver/transport
+ * @output:   initScheduler(), addSchedule(), cancelScheduleByName(), getScheduleByName(), formatScheduleStatus() — 在线走 queue，离线 turn 也只用本次新增模型事实条件校正
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -24,6 +24,7 @@ import {
 } from './schedule-store.js'
 import type { OutgoingMessage, TransportType } from './transport.js'
 import { markdownTextMessage } from './message-format.js'
+import { getLatestObservedModel, reconcileActualModelForSession } from './session-model.js'
 
 type SendToChat = (transport: TransportType, conversationId: string, message: string | OutgoingMessage) => Promise<void>
 
@@ -125,7 +126,17 @@ async function deliverMessage(
   const tool = (reg.tool ?? 'claude') as Parameters<typeof getDriver>[0]
   const driver = getDriver(tool)
   const permissionMode = reg.permissionMode ?? ''
-  driver.sendMessage(reg.sessionId, s.message, reg.cwd, permissionMode).then(output => {
+  const observedBaseline = getLatestObservedModel(tool, reg.sessionId, reg.cwd)
+  driver.sendMessage(reg.sessionId, s.message, reg.cwd, permissionMode, {
+    modelOverride: reg.selectedModelId,
+  }).then(output => {
+    reconcileActualModelForSession(
+      tool,
+      reg.sessionId,
+      reg.cwd,
+      reg.modelSelectionUpdatedAt,
+      observedBaseline,
+    )
     log(`[scheduler] "${reg.name}" 离线触发完成（${output.length} 字符），输出已写入日志`)
   }).catch(err => {
     error(`[scheduler] "${reg.name}" 离线触发失败: ${err}`)

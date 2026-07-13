@@ -170,6 +170,29 @@ Gemini 不再接受新功能开发，仅维持现有功能可用。原因：Gemi
 - 相关 PR / spec 不再写"是否覆盖 Gemini"作为待确认项
 - 若需彻底下线，单开 feature 走 abandonment 流程
 
+### 4.11 Session 级可流转状态由 registry 所有
+
+**引入**：`@20260510-im-slash-passthrough` 2026-07-13 REVISION
+
+凡是用户期望随同一个命名 Session 在 Terminal、飞书、微信之间流转的状态，其 owner 必须是 `RegisteredSession` / registry；`Binding` 只拥有 transport conversation 与 Session 的临时连接关系。
+
+模型选择的具体约束：
+
+- registry 保存工具实际可执行的完整 `selectedModelId`，不以 `opus` 等会漂移的家族 alias 作为持久化真相
+- registry 是最后一道精确 ID 门禁：Claude 已知家族 alias（含 `opus-4.8` 这类版本短名）必须先经 model catalog 映射为完整 ID，无法映射则拒绝；Fable 等自定义 provider 的原生完整 ID 不要求 `claude-` 前缀
+- Terminal 与 IM 的模型切换都写同一个 Session 字段；queue 远程 turn 与 Terminal resume 都从该字段取值
+- `/fs` 用时间关系区分两类事实：“接下来使用的模型”来自 registry；Claude 的“上次回复使用的模型”来自 assistant 响应，Codex 的“上次成功执行的模型”仅来自成功 turn 的有效 `turn_context.model`。不得把 Codex 上下文冒充 provider 响应模型
+- binding 中历史 `modelOverride` 只允许作为迁移 fallback，不再接受新写入
+- 底层 sessionId 因 `/clear` 等轮换时，命名 Session 的模型选择保留
+- 已开始的 turn 同时快照模型 ID、`modelSelectionUpdatedAt` 与启动前的最近工具事实 identity；成功后仅当 watermark 未变且出现了不同于 baseline 的新事实时，才 compare-and-set 校正。后到切换只影响下一 turn，也不得被旧 turn 的较晚完成时间或后续无新事实操作覆盖
+- daemon、SessionStart hook、statusline observer 对 registry 的 read-modify-write 必须持有同一个跨进程 `registry.lock`；仅用 temp + rename 不能阻止 stale snapshot 覆盖
+- 模型事件时间必须在等待写锁前产生，并在锁内与 `modelSelectionUpdatedAt` 比较；同值的新事件也要推进 watermark，周期 statusline 去抖只能在 observer 私有状态层完成
+- `fc` 遇到已存在但实际模型与 Session 目标不同的 TUI 时，不能直接 attach；必须结束该 TUI，再用同一 sessionId 和精确 `--model/-m` resume
+- statusline wrapper 的 next/fallback 链必须防第三方重装闭环：若第三方 leaf 已回指 im2cc observer，重装时保留此前安全 leaf 或降级为空，并对递归 fallback 设置硬上限
+- `/compact` 等成功但不产生 assistant/turn 模型事实的控制操作不得触发模型校正；不能复用启动前的旧 observation
+
+Claude 可用 statusline 的 `model.id` 在回复前观测 Terminal 选择，并从 assistant 记录读取实际响应模型。Claude assistant timestamp 是完成时间，惰性 `/fs` 不得用它覆盖已有显式选择；仅 daemon 自己持有 turn-start watermark 时可在成功后 CAS 校正。Codex 只认最近 `task_complete` 对应 turn 的 `turn_context.model`，并需反向分块扫描以覆盖长 turn；`turn_context` timestamp 是 turn 启动时间，因此外部 Terminal 成功 turn 可按该时间有序吸收，旧 turn 会被更新的 selection watermark 拒绝。它证明的是成功 turn 的有效执行上下文，不证明 provider 内部 response fallback/rewrite。未完成/失败 turn 不得更新最近成功模型状态。新增工具若要实现即时 Terminal → IM 同步，必须提供同等级的可验证模型状态事件，不能解析 UI 文本猜测。
+
 ---
 
 ## 5. 跨 Feature 模式
@@ -290,3 +313,4 @@ bash scripts/smoke.sh                              # 端到端冒烟（需活跃
 | 2026-05-11 | @20260510-im-slash-passthrough | 无新红线 / 跨 feature 模式；spike 实证 `-p` / `exec` 非交互模式下纯"工具内置斜杠命令透传"不可行（仅 Claude /compact 例外）；feature 在 commands.ts 实现"会话控制 alias 层"——/clear /compact /model /status 注册为 im2cc 命令；详见 docs/features/20260510-im-slash-passthrough.md §Plan |
 | 2026-05-13 | @20260513-im-btw-side-fork | 引入 §4.10（远程执行 side fork 旁路讨论生命周期红线，与 §4.2 / §4.7 / §4.9 兼容）；spike 端到端实证：`claude -p --resume <fork_id>` 接受 cp 出的 fork session 文件 + 完整继承主对话上下文 + 只写 fork 文件不污染 baseline + 文件名/内部 sessionId 字段不一致仍 work；范式为"OS 层 cp + driver 标准调用 + finally 清理"；详见 docs/features/20260513-im-btw-side-fork.md §Plan |
 | 2026-05-13 | @20260513-im-btw-side-fork REVISION | §4.10 加"工具限制硬约束"——fork turn 必须经 driver `--disallowed-tools` 禁用 Edit/Write/NotebookEdit/Bash/Task/TodoWrite/AskUserQuestion/SlashCommand，保证不污染工作目录文件系统；对齐 Claude REPL /btw 无损承诺，保留只读类工具以满足 IM 端实用诉求 |
+| 2026-07-13 | @20260510-im-slash-passthrough REVISION | 引入并复审 §4.11：跨 Terminal / IM 状态归 registry；模型以完整 `selectedModelId` 共享，binding 仅作迁移；所有 registry 写方共用跨进程锁和事件 watermark；Codex 只从成功完成 turn 反向取模型；TUI 模型不一致时精确 resume |

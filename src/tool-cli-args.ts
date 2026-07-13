@@ -1,6 +1,6 @@
 /**
- * @input:    ToolId, sessionId, session name
- * @output:   各工具交互式 CLI 命令参数（create/resume/resume hint）
+ * @input:    ToolId, sessionId, session name, Session 精确模型 ID
+ * @output:   各工具交互式 CLI 命令参数（create/resume 时显式恢复同一模型 + resume hint）
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -11,6 +11,8 @@ import { getModeCliArgs, migrateLegacyMode } from './mode-policy.js'
 
 interface ToolCliArgsOptions {
   claudeProfile?: string
+  /** 命名 Session 当前锁定的完整模型 ID。 */
+  selectedModelId?: string
   /**
    * 权限模式。传入则按 mode 派生 CLI flag；
    * 省略时保留历史默认 `--dangerously-skip-permissions`（向后兼容本地 im2cc new/connect 默认行为）。
@@ -22,6 +24,11 @@ function claudePermissionArgs(mode: string | undefined): string[] {
   if (!mode) return ['--dangerously-skip-permissions']
   const native = migrateLegacyMode(mode, 'claude')
   return getModeCliArgs('claude', native)
+}
+
+function selectedModelArgs(tool: ToolId, modelId: string | undefined): string[] {
+  if (!modelId || tool === 'gemini') return []
+  return tool === 'claude' ? ['--model', modelId] : ['-m', modelId]
 }
 
 export function resumeCommand(tool: ToolId, sessionId: string): string {
@@ -41,10 +48,10 @@ export function toolCreateArgs(tool: ToolId, sessionId: string, name: string, op
   switch (tool) {
     case 'claude':
       return buildClaudeInteractiveCommand(
-        ['--session-id', sessionId, ...claudePermissionArgs(opts.permissionMode), ...claudeSessionNameArgs(name)],
+        ['--session-id', sessionId, ...claudePermissionArgs(opts.permissionMode), ...selectedModelArgs(tool, opts.selectedModelId), ...claudeSessionNameArgs(name)],
         { phase: 'create', sessionId, sessionName: name, profile: opts.claudeProfile },
       )
-    case 'codex': return ['codex']
+    case 'codex': return ['codex', ...selectedModelArgs(tool, opts.selectedModelId)]
     case 'gemini': return ['gemini']
     default: return [tool]
   }
@@ -57,10 +64,10 @@ export function toolResumeArgs(tool: ToolId, sessionId: string, name: string, op
   switch (tool) {
     case 'claude':
       return buildClaudeInteractiveCommand(
-        ['--resume', sessionId, ...claudePermissionArgs(opts.permissionMode), ...claudeSessionNameArgs(name)],
+        ['--resume', sessionId, ...claudePermissionArgs(opts.permissionMode), ...selectedModelArgs(tool, opts.selectedModelId), ...claudeSessionNameArgs(name)],
         { phase: 'resume', sessionId, sessionName: name, profile: opts.claudeProfile },
       )
-    case 'codex': return ['codex', 'resume', sessionId]
+    case 'codex': return ['codex', 'resume', sessionId, ...selectedModelArgs(tool, opts.selectedModelId)]
     case 'gemini': return ['gemini', '--resume', sessionId]
     default: return [tool, '--resume', sessionId]
   }

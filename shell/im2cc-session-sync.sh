@@ -43,7 +43,7 @@ log "HOOK FIRED: tmux=$tmux_name name=$im2cc_name payload_len=${#input}"
 
 # 用 python3 解析 JSON 并更新 registry（原子写）
 python3 -c "
-import json, os, re, sys
+import json, os, re, sys, atexit, time
 from datetime import datetime
 
 LOG_PATH = os.path.expanduser('$LOG')
@@ -73,6 +73,32 @@ if not new_sid:
 
 registry_path = '$registry'
 name = '$im2cc_name'
+
+# 与 daemon registry.ts / model statusline 共用跨进程写锁，避免 stale snapshot rename 覆盖新状态。
+lock_path = os.path.join(os.path.dirname(registry_path), 'registry.lock')
+lock_owned = False
+deadline = time.monotonic() + 2.0
+while not lock_owned:
+    try:
+        os.mkdir(lock_path)
+        lock_owned = True
+    except FileExistsError:
+        try:
+            if time.time() - os.stat(lock_path).st_mtime > 10.0:
+                os.rmdir(lock_path)
+                continue
+        except OSError:
+            pass
+        if time.monotonic() >= deadline:
+            log('SKIP: registry lock timeout')
+            sys.exit(0)
+        time.sleep(0.01)
+
+def release_lock():
+    if lock_owned:
+        try: os.rmdir(lock_path)
+        except OSError: pass
+atexit.register(release_lock)
 
 reg = json.load(open(registry_path))
 if name not in reg:

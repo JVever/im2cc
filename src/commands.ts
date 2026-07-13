@@ -21,7 +21,8 @@ import { handleStop, getQueueStatus, listInflightTasksForSession, enqueue } from
 import { getModelCatalog, resolveModelInput, findShortNameByFullName, type ModelOption } from './model-catalog.js'
 import { setPendingModelSelection, clearPendingModelSelection } from './model-pending.js'
 import { discoverSessions, findSession, syncDriftedSession } from './discover.js'
-import { register, registerWithMeta, lookup, lookupBySessionId, search, listRegistered, touch, remove, updateRegistry } from './registry.js'
+import { register, registerWithMeta, lookup, lookupBySessionId, search, listRegistered, touch, remove, updateRegistry, updateSelectedModel } from './registry.js'
+import { getModelSelectionSnapshotForBinding, getSelectedModelForBinding } from './session-model.js'
 import { buildSessionStatus } from './status.js'
 import { log } from './logger.js'
 import { isBestEffortTool, supportedToolChoices, supportedToolList } from './support-policy.js'
@@ -601,8 +602,8 @@ function handleMode(args: string, conversationId: string, config: Im2ccConfig): 
 }
 
 /**
- * /clear — 清空当前对话：调 driver 创建新 sessionId 替换 binding，重置 modelOverride。
- * 对话名 / cwd / permissionMode 不变；旧 sessionId 自动孤立但磁盘文件不删（与现有"漂移孤儿"等同）。
+ * /clear — 清空当前对话：调 driver 创建新 sessionId 替换 binding。
+ * 对话名 / cwd / permissionMode / Session 已选模型不变；旧 sessionId 自动孤立但磁盘文件不删。
  */
 async function handleClear(conversationId: string, config: Im2ccConfig): Promise<string> {
   const binding = getBinding(conversationId)
@@ -643,7 +644,7 @@ async function handleClear(conversationId: string, config: Im2ccConfig): Promise
       binding.cwd,
       binding.permissionMode,
       sessionName,
-      { claudeProfile, conversationId },
+      { claudeProfile, conversationId, selectedModelId: reg.selectedModelId },
     )
 
     // registry 同名替换 sessionId：register 会校验"同 sessionId 不能被多 name 持有"，
@@ -655,7 +656,6 @@ async function handleClear(conversationId: string, config: Im2ccConfig): Promise
 
     updateBinding(conversationId, {
       sessionId: newSessionId,
-      modelOverride: undefined,
       turnCount: 0,
     })
 
@@ -687,13 +687,16 @@ async function handleCompact(conversationId: string): Promise<string> {
 
   try {
     const driver = getDriver(tool)
+    const modelSnapshot = getModelSelectionSnapshotForBinding(binding)
     await driver.sendMessage(
       binding.sessionId,
       '/compact',
       binding.cwd,
       binding.permissionMode,
-      { conversationId },
+      { conversationId, modelOverride: modelSnapshot.selectedModelId },
     )
+    // /compact 通常不追加 assistant 记录，没有属于本操作的新模型事实；不对账，
+    // 避免把此前旧 turn 的 assistant 误当 compact 结果覆盖当前选择。
     log(`[${conversationId}] /compact 完成 (${binding.sessionId.slice(0, 8)})`)
     return '✅ 已压缩对话上下文'
   } catch (err) {
@@ -702,13 +705,13 @@ async function handleCompact(conversationId: string): Promise<string> {
 }
 
 /**
- * /model — 切换 binding 的 modelOverride；下条普通消息生效。
+ * /model — 切换命名 Session 的精确模型 ID；下条普通消息与下次 Terminal resume 生效。
  *
  * 三种调用形式：
  *  - 无参：展示候选模型短列表 + 当前选择 ★ 标记；同时设置 conversationId pending state（60s TTL）
- *  - /model <编号>：等价从内置列表选第 N 项（无需 pending state 依赖）
- *  - /model <短名 | 完整名 | 任意字符串>：直接切换；短名/完整名命中时回执用短名
- *  - /model default：重置为工具默认
+ *  - /model <编号>：等价从当前生效清单选第 N 项（无需 pending state 依赖）
+ *  - /model <短名 | 完整 ID>：仅接受当前清单登记项
+ *  - /model default：清除显式选择，等待下一次成功响应锁定实际 ID
  */
 function handleModel(args: string, conversationId: string): string {
   const binding = getBinding(conversationId)
@@ -721,14 +724,16 @@ function handleModel(args: string, conversationId: string): string {
 
   // /model（无参）— 展示列表 + 设 pending
   if (!trimmed) {
-    return renderModelList(conversationId, binding.modelOverride, tool)
+    return renderModelList(conversationId, getSelectedModelForBinding(binding), tool)
   }
 
   // /model default — 重置为工具默认
   if (trimmed === 'default') {
-    updateBinding(conversationId, { modelOverride: undefined })
+    const reg = lookupBySessionId(binding.sessionId)
+    if (!reg) return '❌ 当前 session 未在 registry 注册，无法切换模型'
+    updateSelectedModel(reg.name, undefined)
     clearPendingModelSelection(conversationId)
-    return '✅ 已重置为工具默认模型'
+    return '✅ 已重置为工具默认模型（未锁定）；下一次成功响应后将记录实际完整 ID'
   }
 
   // /model <编号 1-N>（N = 工具内置清单长度）
@@ -738,22 +743,24 @@ function handleModel(args: string, conversationId: string): string {
     if (idx < catalog.length) {
       return applyModelSelection(conversationId, catalog[idx])
     }
-    // 编号超出清单 → 当任意字符串处理（写入 "2" 这种值给 CLI 会报错，但行为一致）
+    clearPendingModelSelection(conversationId)
+    return `❌ 未识别模型 "${trimmed}"；请用 /model 查看当前清单`
   }
 
-  // /model <短名 | 完整名 | 任意字符串>
+  // /model <已登记短名 | 已登记完整 ID>
   clearPendingModelSelection(conversationId)
   const resolved = resolveModelInput(tool, trimmed)
-  updateBinding(conversationId, { modelOverride: resolved.fullName })
-  const displayName = resolved.shortName ?? resolved.fullName
-  return `✅ 已切换到模型 "${displayName}"，下条消息开始生效`
+  if (!resolved) {
+    return `❌ 未识别模型 "${trimmed}"；请用 /model 查看清单，或先在 modelCatalogs.${tool} 登记`
+  }
+  return applyModelSelection(conversationId, resolved)
 }
 
 /**
  * 渲染候选模型列表文本 + 注册 pending state（60s TTL）。
  * 在 conversationId 上的下一条纯数字消息会被 model-pending 路由命中。
  */
-function renderModelList(conversationId: string, currentModelOverride: string | undefined, tool: ToolId): string {
+function renderModelList(conversationId: string, currentModelId: string | undefined, tool: ToolId): string {
   const catalog = getModelCatalog(tool)
   if (catalog.length === 0) {
     // 不应该走到这里（已在 handleModel 拦截 gemini），兜底
@@ -762,11 +769,10 @@ function renderModelList(conversationId: string, currentModelOverride: string | 
 
   setPendingModelSelection(conversationId, catalog)
 
-  // currentShort 可能是清单内的短名，也可能是用户自由输入的非清单值（原文回显）
-  const currentShort = findShortNameByFullName(tool, currentModelOverride)
+  const currentShort = findShortNameByFullName(tool, currentModelId)
   const isInCatalog = !!currentShort && catalog.some(o => o.shortName === currentShort)
   // ★ 仅在当前选择真的命中清单时才在 headline 显示，与列表行的 ★ 标记保持一致
-  const headline = `🤖 ${toolDisplayName(tool)} 可选模型（当前: ${currentShort ?? '使用工具默认'}${isInCatalog ? ' ★' : ''}）`
+  const headline = `🤖 ${toolDisplayName(tool)} 可选模型（当前: ${currentModelId ?? '工具默认（未锁定）'}${isInCatalog ? ' ★' : ''}）`
 
   // 计算列宽，让短名右侧描述对齐
   const maxNameWidth = Math.max(...catalog.map(o => o.shortName.length))
@@ -774,7 +780,7 @@ function renderModelList(conversationId: string, currentModelOverride: string | 
     const num = i + 1
     const namePad = opt.shortName.padEnd(maxNameWidth)
     const star = currentShort === opt.shortName ? ' ★ 当前' : ''
-    return `  ${num}) ${namePad}  — ${opt.description}${star}`
+    return `  ${num}) ${namePad}  — ${opt.fullName} — ${opt.description}${star}`
   })
 
   return [
@@ -792,9 +798,13 @@ function renderModelList(conversationId: string, currentModelOverride: string | 
  * 复用：handleModel 编号路径 + index.ts pending 路由命中。
  */
 export function applyModelSelection(conversationId: string, option: ModelOption): string {
-  updateBinding(conversationId, { modelOverride: option.fullName })
+  const binding = getBinding(conversationId)
+  if (!binding) return '❌ 当前会话未连接对话，请先 /fc 或 /fn'
+  const reg = lookupBySessionId(binding.sessionId)
+  if (!reg) return '❌ 当前 session 未在 registry 注册，无法切换模型'
+  updateSelectedModel(reg.name, option.fullName)
   clearPendingModelSelection(conversationId)
-  return `✅ 已切换到模型 "${option.shortName}"，下条消息开始生效`
+  return `✅ 已选定模型 "${option.shortName}"（${option.fullName}），下一轮开始生效`
 }
 
 

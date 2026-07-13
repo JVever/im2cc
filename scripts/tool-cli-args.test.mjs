@@ -48,6 +48,33 @@ test('codex interactive args use top-level resume without exec-only flags', asyn
   assert.equal(resumeCommand('codex', 'sid-1'), 'codex resume sid-1')
 })
 
+test('interactive create/resume restore the Session exact model ID', async () => {
+  process.env.IM2CC_CLAUDE_SUPPORTS_NAME = '0'
+  process.env.IM2CC_CLAUDE_LAUNCHER = 'claude'
+  try {
+    const cliArgs = await import(`${cliArgsModuleUrl}?case=exact-model`)
+    assert.deepEqual(
+      cliArgs.toolCreateArgs('claude', 'sid-model', 'demo', { selectedModelId: 'claude-opus-4-7' }),
+      ['claude', '--session-id', 'sid-model', '--dangerously-skip-permissions', '--model', 'claude-opus-4-7'],
+    )
+    assert.deepEqual(
+      cliArgs.toolResumeArgs('claude', 'sid-model', 'demo', { selectedModelId: 'claude-opus-4-7' }),
+      ['claude', '--resume', 'sid-model', '--dangerously-skip-permissions', '--model', 'claude-opus-4-7'],
+    )
+    assert.deepEqual(
+      cliArgs.toolCreateArgs('codex', 'sid-codex', 'demo', { selectedModelId: 'gpt-5.6-sol' }),
+      ['codex', '-m', 'gpt-5.6-sol'],
+    )
+    assert.deepEqual(
+      cliArgs.toolResumeArgs('codex', 'sid-codex', 'demo', { selectedModelId: 'gpt-5.6-sol' }),
+      ['codex', 'resume', 'sid-codex', '-m', 'gpt-5.6-sol'],
+    )
+  } finally {
+    delete process.env.IM2CC_CLAUDE_SUPPORTS_NAME
+    delete process.env.IM2CC_CLAUDE_LAUNCHER
+  }
+})
+
 test('gemini interactive args still work as best-effort path', async () => {
   const { toolCreateArgs, toolResumeArgs, resumeCommand } = await import(`${cliArgsModuleUrl}?case=gemini`)
 

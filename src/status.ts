@@ -1,6 +1,6 @@
 /**
- * @input:    Binding, RegisteredSession, Claude/Codex session files, macOS Keychain (OAuth), git
- * @output:   buildSessionStatus() — 构建会话状态面板（/fs 和 /fc 共用）
+ * @input:    Binding, RegisteredSession 精确模型状态, Claude/Codex session files, macOS Keychain (OAuth), git
+ * @output:   buildSessionStatus() — 构建会话状态面板（/fs 和 /fc 共用；用“接下来 / 上次”区分目标模型与最近成功事实）
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -13,6 +13,7 @@ import { listRegistered } from './registry.js'
 import { getQueueStatus } from './queue.js'
 import { pathToSlug } from './discover.js'
 import { log } from './logger.js'
+import { getLatestObservedModel, getSelectedModelForBinding } from './session-model.js'
 
 // ── Formatting helpers ─────────────────────────────────────────
 
@@ -55,12 +56,6 @@ function toolLabel(tool: string): string {
     case 'gemini': return 'Gemini'
     default: return tool
   }
-}
-
-function shortModelName(model: string): string {
-  return model
-    .replace(/^claude-/, '')
-    .replace(/-\d{8}$/, '')  // strip date suffix
 }
 
 /** 格式化重置时间：始终精确到小时分钟 */
@@ -265,7 +260,7 @@ function getCodexSessionData(threadId: string): CodexSessionData {
             inputTokens: u.input_tokens ?? 0,
             outputTokens: u.output_tokens ?? 0,
             cacheTokens: u.cached_input_tokens ?? 0,
-            model: getCodexModel(),
+            model: '',
           }
         }
 
@@ -288,16 +283,6 @@ function getCodexSessionData(threadId: string): CodexSessionData {
   return result
 }
 
-function getCodexModel(): string {
-  try {
-    const configPath = path.join(os.homedir(), '.codex', 'config.toml')
-    if (!fs.existsSync(configPath)) return ''
-    const content = fs.readFileSync(configPath, 'utf-8')
-    const match = content.match(/^model\s*=\s*"(.+?)"/m)
-    return match?.[1] ?? ''
-  } catch { return '' }
-}
-
 // ── Main status builder ────────────────────────────────────────
 
 export interface StatusOptions {
@@ -315,6 +300,8 @@ export async function buildSessionStatus(
   const tool = regEntry?.tool ?? binding.tool ?? 'claude'
   const qs = getQueueStatus(binding.conversationId)
   const gitBranch = getGitBranch(binding.cwd)
+  const selectedModelId = getSelectedModelForBinding(binding)
+  const latestObservedModel = getLatestObservedModel(tool, binding.sessionId, binding.cwd)
 
   // 根据工具类型获取上下文和配额数据
   let contextInfo: ContextInfo | null = null
@@ -351,12 +338,18 @@ export async function buildSessionStatus(
   const queueSuffix = qs.queueLength > 0 ? `(队列 ${qs.queueLength})` : ''
   lines.push(`${binding.permissionMode}  ·  ${binding.turnCount}轮  ·  ${stateStr}${queueSuffix}`)
 
-  // ❺ 上下文 & 模型
+  // ❺ Session 模型真值与工具可验证的最近成功模型状态（完整 ID，不缩写）。
+  // Claude session 文件含 assistant.model；Codex 目前只含成功 turn 的 turn_context.model。
+  lines.push(SEP)
+  lines.push(`接下来使用的模型：${selectedModelId ?? '工具默认模型'}`)
+  const observedModelLabel = tool === 'codex' ? '上次成功执行的模型' : '上次回复使用的模型'
+  lines.push(`${observedModelLabel}：${latestObservedModel?.id ?? '暂无记录'}`)
+
+  // ❻ 上下文
   if (contextInfo) {
     lines.push(SEP)
     const totalInput = contextInfo.inputTokens + contextInfo.cacheTokens
-    const model = contextInfo.model ? shortModelName(contextInfo.model) : ''
-    lines.push(`上下文 ${formatTokens(totalInput)}${model ? `  ·  ${model}` : ''}`)
+    lines.push(`上下文 ${formatTokens(totalInput)}`)
 
     const details: string[] = []
     if (contextInfo.cacheTokens > 0) details.push(`缓存 ${formatTokens(contextInfo.cacheTokens)}`)
@@ -365,7 +358,7 @@ export async function buildSessionStatus(
     lines.push(details.join('  ·  '))
   }
 
-  // ❻ 配额
+  // ❼ 配额
   if (quota) {
     lines.push(SEP)
     const fhReset = quota.fiveHourResetAt ? formatResetTime(quota.fiveHourResetAt) : ''
@@ -374,7 +367,7 @@ export async function buildSessionStatus(
     lines.push(`周  ${progressBar(quota.weeklyPercent)} ${quota.weeklyPercent}%${wkReset ? `  ${wkReset}` : ''}`)
   }
 
-  // ❼ 底部
+  // ❽ 底部
   lines.push(SEP)
   const active = relativeTime(binding.lastActiveAt)
   const hint = regEntry ? `fc ${regEntry.name}` : 'fc <名称>'

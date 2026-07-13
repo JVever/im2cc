@@ -1,6 +1,6 @@
 /**
  * @input:    无（接口定义 + driver 注册表）
- * @output:   ToolDriver 接口, registerDriver(), getDriver(), getDefaultDriver() — 多工具抽象层（含 SendMessageOptions.modelOverride 让 /model 写入的覆盖透传给 driver）
+ * @output:   ToolDriver 接口, registerDriver(), getDriver(), getDefaultDriver() — 创建与发送均可透传 Session 精确模型
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -32,6 +32,8 @@ export interface CreateSessionResult {
 
 export interface CreateSessionOptions {
   claudeProfile?: string
+  /** 创建新底层 session 时沿用命名 Session 当前锁定的完整模型 ID（/clear）。 */
+  selectedModelId?: string
   /** 关联的 IM 会话 — 用于 Claude AskUserQuestion PreToolUse hook 把问题路由回正确的 IM 通道 */
   conversationId?: string
 }
@@ -45,7 +47,7 @@ export interface SendMessageOptions {
   onTurnEvent?: (event: import('./base-driver.js').TurnEvent) => void
   /** 关联的 IM 会话 — 用于 Claude AskUserQuestion PreToolUse hook 把问题路由回正确的 IM 通道 */
   conversationId?: string
-  /** 本次调用的模型覆盖（由 /model 命令写入 binding，queue 透传给 driver）；undefined = 用工具默认 */
+  /** 本 turn 使用的 Session 精确模型 ID；字段名保留 modelOverride 以兼容现有 driver */
   modelOverride?: string
   /**
    * 本次调用的工具黑名单（@20260513-im-btw-side-fork REVISION）。

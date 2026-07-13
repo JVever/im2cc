@@ -1,6 +1,6 @@
 /**
- * @input:    用户消息, Claude 驱动, Session 绑定
- * @output:   enqueue(), handleStop(), getQueueStatus(), recoverOnStartup(), listInflightTasksForSession() — 消息队列、Job 管理、持久化恢复、桌面接回保护态快照
+ * @input:    用户消息, Tool 驱动, Session 绑定与 RegisteredSession 模型 ID + selection watermark + observed baseline
+ * @output:   enqueue(), handleStop(), getQueueStatus(), recoverOnStartup(), listInflightTasksForSession() — 只用本 turn 新模型事实完成 CAS 的消息队列、Job 管理和恢复
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
@@ -17,6 +17,7 @@ import { cancelBySessionId as cancelAskUserBySessionId } from './askuser-bridge.
 import { createTurnAggregator, type AggregatorAction } from './turn-aggregator.js'
 import { loadConfig } from './config.js'
 import type { OutgoingMessage } from './transport.js'
+import { getModelSelectionSnapshotForBinding, reconcileActualModel } from './session-model.js'
 
 /**
  * /btw fork turn 强制禁用的工具列表（@20260513-im-btw-side-fork REVISION 2026-05-13）。
@@ -452,6 +453,9 @@ async function processNext(
 
   try {
     const driver = getDriver(binding.tool ?? 'claude')
+    // turn 开始时同时快照模型与 selection watermark：模型固定本 turn，watermark 防止
+    // 本 turn 完成后把执行期间产生的新选择覆盖回去。
+    const modelSnapshot = getModelSelectionSnapshotForBinding(binding)
     const output = await driver.sendMessage(
       effectiveSessionId,
       msg.text,
@@ -459,7 +463,7 @@ async function processNext(
       binding.permissionMode,
       {
         conversationId,
-        modelOverride: binding.modelOverride,
+        modelOverride: modelSnapshot.selectedModelId,
         // @20260513-im-btw-side-fork REVISION: fork turn 强制注入工具黑名单
         disallowedTools: msg.forkSessionId ? [...BTW_DISALLOWED_TOOLS] : undefined,
         onSpawn: (child) => {
@@ -487,6 +491,13 @@ async function processNext(
 
     // fork turn 不递增主 binding.turnCount（@20260513-im-btw-side-fork）
     if (!msg.forkSessionId) {
+      // 仅成功 turn 用工具实际写入的完整模型 ID 校正 Session 真值。
+      reconcileActualModel(
+        binding,
+        effectiveSessionId,
+        modelSnapshot.modelSelectionUpdatedAt,
+        modelSnapshot.observedBaseline,
+      )
       updateBinding(conversationId, { turnCount: binding.turnCount + 1 })
     }
     completionPreview = output

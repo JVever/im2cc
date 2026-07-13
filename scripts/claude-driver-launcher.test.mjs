@@ -60,7 +60,7 @@ test('ClaudeDriver uses configured launcher and reuses stored profile for follow
         const driverModule = await import(driverModuleUrl + '?case=launcher-subprocess')
         const registry = await import(registryModuleUrl + '?case=launcher-subprocess')
         const cwd = ${JSON.stringify(tempHome)}
-        const result = await driverModule.createSession(cwd, 'default', 'demo', { claudeProfile: 'glm' })
+        const result = await driverModule.createSession(cwd, 'default', 'demo', { claudeProfile: 'glm', selectedModelId: 'claude-opus-4-8' })
         registry.registerWithMeta('demo', result.sessionId, cwd, 'claude', { claudeProfile: 'glm' })
         const reply = await driverModule.sendMessage(result.sessionId, '继续', cwd, 'default')
         process.stdout.write(JSON.stringify({ sessionId: result.sessionId, output: result.output, reply }))
@@ -89,6 +89,7 @@ test('ClaudeDriver uses configured launcher and reuses stored profile for follow
     assert.equal(logs[0].phase, 'create')
     assert.equal(logs[0].profile, 'glm')
     assert.ok(logs[0].args.includes('--session-id'))
+    assert.deepEqual(logs[0].args.slice(logs[0].args.indexOf('--model'), logs[0].args.indexOf('--model') + 2), ['--model', 'claude-opus-4-8'])
     assert.equal(logs[1].phase, 'send')
     assert.equal(logs[1].profile, 'glm')
     assert.ok(logs[1].args.includes('--session-id'))
