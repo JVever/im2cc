@@ -128,3 +128,74 @@ test('renderOutgoingMessageAsText routes interactive_card through buildAskUserTe
   })
   assert.equal(viaRender, direct)
 })
+
+// --- AI Markdown 回复渲染（飞书 post+md tag / 微信纯文本降级） ---
+
+const MARKDOWN_SAMPLE = [
+  '# 一级标题',
+  '## 二级标题',
+  '',
+  '正文带 **粗体** 和 `inline code`，还有普通纯文本。',
+  '',
+  '- 列表项 1',
+  '- 列表项 2',
+  '',
+  '```js',
+  'const x = 1',
+  'console.log(x)',
+  '```',
+].join('\n')
+
+test('markdownTextMessage 标记 markdown=true 的 text 消息', () => {
+  const msg = messageFormat.markdownTextMessage('**bold**')
+  assert.equal(msg.kind, 'text')
+  assert.equal(msg.text, '**bold**')
+  assert.equal(msg.markdown, true)
+})
+
+test('buildFeishuMessage 把 markdown text 渲染为 post + md tag（原文直送，不 escape/不转列表）', () => {
+  const payload = messageFormat.buildFeishuMessage(messageFormat.markdownTextMessage(MARKDOWN_SAMPLE))
+  assert.equal(payload.msgType, 'post')
+
+  const parsed = JSON.parse(payload.content)
+  // AI 回复无标题：不带 title 字段（避免飞书空标题行）
+  assert.equal(parsed.zh_cn.title, undefined)
+  // 单段单元素，整段 markdown 塞进一个 md tag
+  assert.equal(parsed.zh_cn.content.length, 1)
+  assert.equal(parsed.zh_cn.content[0].length, 1)
+  assert.equal(parsed.zh_cn.content[0][0].tag, 'md')
+
+  // 关键：md text 与原文完全一致 —— 证明标题/列表/粗体/inline code/code block 均未被转义或改写
+  const mdText = parsed.zh_cn.content[0][0].text
+  assert.equal(mdText, MARKDOWN_SAMPLE)
+
+  // 逐项确认 markdown 符号原样保留（过度 escape 会让飞书 md tag 也不渲染）
+  assert.match(mdText, /^# 一级标题/m, '标题 # 保留')
+  assert.match(mdText, /^## 二级标题/m, '二级标题保留')
+  assert.match(mdText, /\*\*粗体\*\*/, '粗体 ** 保留')
+  assert.match(mdText, /`inline code`/, 'inline code 反引号保留')
+  assert.match(mdText, /^- 列表项 1/m, '列表 - 保留')
+  assert.match(mdText, /```js\nconst x = 1/, 'fenced code block 保留')
+
+  // 不能出现反斜杠转义（如 \# \* \- \` \[ 等）
+  assert.doesNotMatch(mdText, /\\[#*`\-[\]()]/, '不应有反斜杠转义')
+})
+
+test('buildFeishuMessage 普通 text（无 markdown 标记）仍走 text msg_type，符号原样不渲染', () => {
+  const payload = messageFormat.buildFeishuMessage(messageFormat.textMessage('**bold** 与 # 号'))
+  assert.equal(payload.msgType, 'text')
+  const parsed = JSON.parse(payload.content)
+  assert.equal(parsed.text, '**bold** 与 # 号')
+})
+
+test('buildFeishuMessage 空 markdown text 退回 text msg_type，避免空 post 卡片', () => {
+  for (const empty of ['', '   ', '\n\n']) {
+    const payload = messageFormat.buildFeishuMessage(messageFormat.markdownTextMessage(empty))
+    assert.equal(payload.msgType, 'text', `空文本 ${JSON.stringify(empty)} 应退回 text`)
+  }
+})
+
+test('renderOutgoingMessageAsText 对 markdown text 返回原文（微信纯文本降级，不破坏微信通道）', () => {
+  const rendered = messageFormat.renderOutgoingMessageAsText(messageFormat.markdownTextMessage(MARKDOWN_SAMPLE))
+  assert.equal(rendered, MARKDOWN_SAMPLE)
+})

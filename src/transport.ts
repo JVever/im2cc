@@ -38,6 +38,12 @@ export interface MessageSection {
 export interface TextMessage {
   kind: 'text'
   text: string
+  /**
+   * true 表示 text 是 Markdown 源文（AI 工具回复）：飞书渲染为 post + `tag:md`，
+   * 微信等纯文本端原样降级。缺省 / false 表示原样纯文本（系统提示、命令回执等）。
+   * 由消息产生方（AI driver 输出 vs 系统代码）按 ownership 决定，transport 不猜测。
+   */
+  markdown?: boolean
 }
 
 export interface PanelMessage {

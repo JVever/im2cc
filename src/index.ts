@@ -40,7 +40,7 @@ import {
 } from './anti-pomodoro.js'
 import { initScheduler } from './scheduler.js'
 import { startTmuxWatcher, stopTmuxWatcher } from './tmux-watcher.js'
-import { structureSystemReply } from './message-format.js'
+import { markdownTextMessage, structureSystemReply } from './message-format.js'
 import {
   startAskUserBridge,
   stopAskUserBridge,
@@ -76,6 +76,28 @@ export function shouldSendFcRecap(
     && recapBudget > 0
     && !hadBindingBefore
     && hasBindingAfter
+}
+
+/**
+ * AI 文本回复统一出口（飞书 Markdown 渲染 / 微信纯文本降级 / 反茄钟休息期延迟）。
+ *
+ * - reply 为 string：视为 AI 工具的 Markdown 回复。反茄钟休息期先入延迟队列（带 markdown
+ *   标记，恢复推送时仍渲染）；否则包成 markdownTextMessage 交给 sender（飞书 post+md）。
+ * - reply 为 OutgoingMessage（tool_status 等）：原样直发，不当 Markdown，也不进延迟队列。
+ *
+ * sender 由调用点注入（主路径用 send；recovery 用 sendByConversationId 包装）。
+ */
+async function deliverAiReply(
+  conversationId: string,
+  reply: string | OutgoingMessage,
+  sender: (message: string | OutgoingMessage) => Promise<void>,
+): Promise<void> {
+  if (typeof reply !== 'string') {
+    await sender(reply)
+    return
+  }
+  if (queueDelayedReply(conversationId, reply, Date.now(), { markdown: true })) return
+  await sender(markdownTextMessage(reply))
 }
 
 /**
@@ -277,7 +299,8 @@ export async function startDaemon(): Promise<void> {
   // --- Transport adapters ---
   const adapters = new Map<TransportType, TransportAdapter>()
   const antiPomodoro = new AntiPomodoroDaemonController(
-    async (conversationId, text) => sendByConversationId(conversationId, text),
+    async (conversationId, text, markdown) =>
+      sendByConversationId(conversationId, markdown ? markdownTextMessage(text) : text),
   )
 
   /** 通过 transport 类型找到对应 adapter 发送消息 */
@@ -467,10 +490,9 @@ export async function startDaemon(): Promise<void> {
       try {
         const hadBindingBefore = Boolean(getBinding(conversationId))
         // @20260513-im-btw-side-fork: /btw 需要 sendReply 闭包以 enqueue fork turn；
-        // 其他命令不用 sendReply 但接受它无副作用
+        // 其他命令不用 sendReply 但接受它无副作用。fork turn 的 AI 回复同样按 Markdown 渲染。
         const btwSendReply = async (reply: string | OutgoingMessage) => {
-          if (typeof reply === 'string' && queueDelayedReply(conversationId, reply)) return
-          await send(reply)
+          await deliverAiReply(conversationId, reply, send)
         }
         const reply = await handleCommand(cmd, conversationId, config, transport, btwSendReply)
         const binding = getBinding(conversationId)
@@ -484,8 +506,9 @@ export async function startDaemon(): Promise<void> {
                 ? buildRecapMessages(turn, { intro: reply, transport, maxMessages: 3 })
                 : []
               if (recapMessages.length > 0) {
+                // recap 是 AI 历史对话内容，按 Markdown 渲染（/fc 即时路径，不经反茄钟延迟）
                 for (const message of recapMessages) {
-                  await send(message)
+                  await send(markdownTextMessage(message))
                 }
               } else {
                 await sendSystem(reply)
@@ -594,9 +617,9 @@ export async function startDaemon(): Promise<void> {
         conversationId,
         prompt,
         async (reply) => {
-          // OutgoingMessage (含 tool_status) 跳过反茄钟延迟队列,实时发送（@20260512-im-tool-call-progress）
-          if (typeof reply === 'string' && queueDelayedReply(conversationId, reply)) return
-          await send(reply)
+          // AI 文本回复 → 飞书 Markdown 渲染；OutgoingMessage（tool_status）原样实时发送、
+          // 不进反茄钟延迟队列（@20260512-im-tool-call-progress）
+          await deliverAiReply(conversationId, reply, send)
         },
       )
     }
@@ -659,24 +682,16 @@ export async function startDaemon(): Promise<void> {
 
   // 初始化定时消息调度器（含错过窗口处理：at/in 立即触发，cron 跳过本次）
   await initScheduler({
-    sendToChat: (transport, conversationId, text) => sendToConversation(transport, conversationId, text),
+    sendToChat: (transport, conversationId, message) => sendToConversation(transport, conversationId, message),
   })
 
   // 恢复上次中断的任务
   await recoverOnStartup(
-    async (conversationId, text) => {
-      if (queueDelayedReply(conversationId, text)) return
-      await sendByConversationId(conversationId, text)
-    },
-    (conversationId) => async (message) => {
-      // @20260512-im-tool-call-progress: 支持 OutgoingMessage (tool_status 等)
-      if (typeof message === 'string') {
-        if (queueDelayedReply(conversationId, message)) return
-        await sendByConversationId(conversationId, message)
-      } else {
-        await sendByConversationId(conversationId, message)
-      }
-    },
+    async (conversationId, text) =>
+      deliverAiReply(conversationId, text, message => sendByConversationId(conversationId, message)),
+    // @20260512-im-tool-call-progress: 支持 OutgoingMessage (tool_status 等)
+    (conversationId) => async (message) =>
+      deliverAiReply(conversationId, message, m => sendByConversationId(conversationId, m)),
   )
 
   // 发送重启通知（仅飞书，微信不支持主动推送）

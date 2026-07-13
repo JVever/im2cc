@@ -19,6 +19,8 @@ export type AntiPomodoroPhase = 'waiting' | 'work' | 'rest'
 interface DelayedReply {
   conversationId: string
   text: string
+  /** true 表示这是 AI 工具的 Markdown 回复，恢复推送时仍需按 Markdown 渲染（飞书 post+md） */
+  markdown?: boolean
   queuedAt: string
 }
 
@@ -402,7 +404,12 @@ export function claimRestQuota(now: number = Date.now()): RestQuotaDecision {
   }
 }
 
-export function queueDelayedReply(conversationId: string, text: string, now: number = Date.now()): boolean {
+export function queueDelayedReply(
+  conversationId: string,
+  text: string,
+  now: number = Date.now(),
+  opts: { markdown?: boolean } = {},
+): boolean {
   const state = readState(now)
   const reconciled = reconcileState(state, now)
   const current = reconciled.state
@@ -415,6 +422,8 @@ export function queueDelayedReply(conversationId: string, text: string, now: num
   current.delayedReplies.push({
     conversationId,
     text,
+    // 仅在为真时写字段，保持持久化 JSON 干净 + 与旧数据向后兼容
+    ...(opts.markdown ? { markdown: true } : {}),
     queuedAt: nowIso(now),
   })
   current.updatedAt = nowIso(now)
@@ -503,7 +512,7 @@ export class AntiPomodoroDaemonController {
   private watching = false
 
   constructor(
-    private readonly sendByConversationId: (conversationId: string, text: string) => Promise<void>,
+    private readonly sendByConversationId: (conversationId: string, text: string, markdown: boolean) => Promise<void>,
   ) {}
 
   start(): void {
@@ -548,7 +557,7 @@ export class AntiPomodoroDaemonController {
           if (!item) break
 
           try {
-            await this.sendByConversationId(item.conversationId, item.text)
+            await this.sendByConversationId(item.conversationId, item.text, item.markdown ?? false)
           } catch (err) {
             error(`[anti-pomodoro] 延迟结果送达失败 [${item.conversationId}]: ${err instanceof Error ? err.message : String(err)}`)
             this.schedule(reconciled.state, Date.now(), ANTI_POMODORO_RETRY_MS)

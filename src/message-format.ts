@@ -1,10 +1,10 @@
 /**
  * @input:    结构化出站消息或系统回复文本
- * @output:   消息结构推断与 transport 渲染（飞书 post / 纯文本降级）
+ * @output:   消息结构推断与 transport 渲染（系统回复识别、AI Markdown 回复飞书 post+md 渲染、微信纯文本降级）；markdownTextMessage() 给 AI 回复打 markdown 标记
  * @rule:     如本文件 @input 或 @output 发生变化，必须更新本注释并检查 _INDEX.md
  */
 
-import type { InteractiveCardMessage, MessageSection, OutgoingMessage, PanelMessage, ToolStatusMessage } from './transport.js'
+import type { InteractiveCardMessage, MessageSection, OutgoingMessage, PanelMessage, TextMessage, ToolStatusMessage } from './transport.js'
 
 const PANEL_MAX_CHARS = 12_000
 const PANEL_MAX_LINES = 120
@@ -12,6 +12,15 @@ const SECTION_BREAK_RE = /^[─-]{3,}$/
 
 export function textMessage(text: string): OutgoingMessage {
   return { kind: 'text', text }
+}
+
+/**
+ * AI 工具回复的 Markdown 文本消息：飞书渲染为 post + `tag:md`，微信纯文本降级。
+ * 与 textMessage 的区别仅在 markdown 标记 —— 用于在 AI 回复出口处打标，
+ * 系统提示 / 命令回执继续用 textMessage（原样纯文本）。
+ */
+export function markdownTextMessage(text: string): TextMessage {
+  return { kind: 'text', text, markdown: true }
 }
 
 export function panelMessage(title: string, sections: MessageSection[]): PanelMessage {
@@ -174,6 +183,19 @@ function formatLineForFeishuMd(line: string): string {
 
 export function buildFeishuMessage(message: OutgoingMessage): { msgType: 'text' | 'post', content: string } {
   if (message.kind === 'text') {
+    // AI Markdown 回复：post + 单个 md 元素，原文直送（不 escape、不转列表），飞书才会渲染
+    // 标题/列表/粗体/inline code/fenced code。空文本不构造 post，退回 text 避免空卡片。
+    if (message.markdown && message.text.trim()) {
+      // AI 回复无标题：飞书 post 的 title 可选，省略避免空标题行（panel 才带 title）
+      return {
+        msgType: 'post',
+        content: JSON.stringify({
+          zh_cn: {
+            content: [[{ tag: 'md', text: message.text }]],
+          },
+        }),
+      }
+    }
     return {
       msgType: 'text',
       content: JSON.stringify({ text: message.text }),

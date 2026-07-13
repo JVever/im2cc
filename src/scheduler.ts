@@ -22,9 +22,10 @@ import {
   removeScheduleById,
   updateAfterFire,
 } from './schedule-store.js'
-import type { TransportType } from './transport.js'
+import type { OutgoingMessage, TransportType } from './transport.js'
+import { markdownTextMessage } from './message-format.js'
 
-type SendToChat = (transport: TransportType, conversationId: string, text: string) => Promise<void>
+type SendToChat = (transport: TransportType, conversationId: string, message: string | OutgoingMessage) => Promise<void>
 
 interface SchedulerDeps {
   sendToChat: SendToChat
@@ -107,14 +108,13 @@ async function deliverMessage(
     // 有活跃绑定：走 queue，输出回到当前绑定的 chat；
     // 反茄钟休息期：queueDelayedReply 会拦下输出延迟到工作期再送达，与人发的消息一视同仁
     enqueue(targetBinding.conversationId, s.message, async (reply) => {
-      // OutgoingMessage (含 tool_status) 跳过反茄钟延迟队列,实时发送（@20260512-im-tool-call-progress）
       if (typeof reply === 'string') {
-        if (queueDelayedReply(targetBinding.conversationId, reply)) return
-        await safeSend(targetBinding.transport, targetBinding.conversationId, reply)
+        // 触发的 AI 文本回复：飞书按 Markdown 渲染；反茄钟休息期延迟到工作期再送达（带 markdown 标记）
+        if (queueDelayedReply(targetBinding.conversationId, reply, Date.now(), { markdown: true })) return
+        await safeSend(targetBinding.transport, targetBinding.conversationId, markdownTextMessage(reply))
       } else {
-        // OutgoingMessage: 退化为纯文本走 safeSend (scheduler 路径不直连 transport.sendMessage)
-        const { renderOutgoingMessageAsText } = await import('./message-format.js')
-        await safeSend(targetBinding.transport, targetBinding.conversationId, renderOutgoingMessageAsText(reply))
+        // OutgoingMessage（含 tool_status）：交给 sendToConversation 分发（飞书对应 msg_type / 微信纯文本降级）
+        await safeSend(targetBinding.transport, targetBinding.conversationId, reply)
       }
     })
     const sameChat = targetBinding.conversationId === s.conversationId
@@ -156,13 +156,13 @@ function truncate(text: string, max: number): string {
   return text.length <= max ? text : text.slice(0, max) + '…'
 }
 
-async function safeSend(transport: TransportType, conversationId: string, text: string): Promise<void> {
+async function safeSend(transport: TransportType, conversationId: string, message: string | OutgoingMessage): Promise<void> {
   if (!deps) {
     error(`[scheduler] 未初始化，无法发送回执`)
     return
   }
   try {
-    await deps.sendToChat(transport, conversationId, text)
+    await deps.sendToChat(transport, conversationId, message)
   } catch (err) {
     error(`[scheduler] 回执发送失败 [${conversationId}]: ${err}`)
   }

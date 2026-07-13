@@ -126,3 +126,45 @@ test('anti-pomodoro daemon sync keeps delayed replies on send failure and retrie
     controller.stop()
   }
 })
+
+test('queueDelayedReply 透传 markdown 标记，controller 出队时回调收到 markdown 布尔值', async () => {
+  resetState()
+
+  const t0 = Date.UTC(2026, 0, 1, 15, 0, 0)
+  antiPomodoro.enableAntiPomodoro(t0)
+  antiPomodoro.startWorkPhaseIfWaiting(t0 + 1000)
+
+  const restAt = t0 + 1000 + antiPomodoro.ANTI_POMODORO_WORK_MS + 1000
+  // AI Markdown 回复 → markdown:true；普通文本不传 opts → markdown 缺省
+  antiPomodoro.queueDelayedReply('conv-md', '# 标题\n- item', restAt, { markdown: true })
+  antiPomodoro.queueDelayedReply('conv-plain', '纯文本', restAt + 1)
+
+  // 持久化只在为真时写 markdown 字段（向后兼容旧数据 + JSON 干净）
+  const persisted = readPersistedState()
+  const mdEntry = persisted.delayedReplies.find(r => r.conversationId === 'conv-md')
+  const plainEntry = persisted.delayedReplies.find(r => r.conversationId === 'conv-plain')
+  assert.equal(mdEntry.markdown, true)
+  assert.equal(plainEntry.markdown, undefined)
+
+  const waitingAt = restAt + antiPomodoro.ANTI_POMODORO_REST_MS + 1000
+  const realDateNow = Date.now
+  const received = []
+  const controller = new antiPomodoro.AntiPomodoroDaemonController(async (conversationId, text, markdown) => {
+    received.push({ conversationId, text, markdown })
+  })
+
+  Date.now = () => waitingAt
+  try {
+    await controller.sync()
+  } finally {
+    Date.now = realDateNow
+    controller.stop()
+  }
+
+  assert.equal(received.length, 2)
+  const md = received.find(r => r.conversationId === 'conv-md')
+  const plain = received.find(r => r.conversationId === 'conv-plain')
+  assert.equal(md.text, '# 标题\n- item')
+  assert.equal(md.markdown, true)
+  assert.equal(plain.markdown, false)
+})
