@@ -1,5 +1,58 @@
 # im2cc Agent Instructions
 
+> 本文件是 im2cc 跨工具项目规则的唯一真相源；`CLAUDE.md` 是指向本文件的软链。Claude Code、Codex 及其他 coding agent 应读取同一份项目事实。
+
+## Shared rules
+
+Before working in this repository, read `~/.ai-rules/software-project.md` in full and follow it together with this file. Repository-specific rules in this file take precedence when they are more specific.
+
+## Project development context
+
+im2cc remotely controls local AI coding tools (Claude Code, Codex, and Gemini) through Feishu or WeChat. It is a TypeScript + Node.js project with a macOS LaunchAgent daemon.
+
+### Required reading
+
+- Read `PROJECT.md` at the start of every task for the current architecture, design decisions, command system, and stack.
+- Before changing a directory, read its `_INDEX.md` when present.
+- Before changing a source file, read its `@input` / `@output` header when present.
+- For release, push, or publish work, follow `RELEASE.md` as described below.
+
+### Architecture invariants
+
+- **Single daemon instance**: startup cleanup, runtime self-check, and the lock file jointly enforce that only one daemon is active.
+- **Registry ownership**: `registry.json` is the authoritative source of session identity; tmux names are process-management labels only.
+- **Exclusive access**: a session can be controlled from only one endpoint at a time.
+- **Mode ownership**: `src/mode-policy.ts` is the single source of truth for tool permission modes.
+- **Non-interactive execution**: the daemon invokes tool CLIs with non-interactive flags; Claude Plan mode is unavailable on this path, and other interactive-only modes must not be assumed available.
+
+### Key files
+
+| Change | Read first |
+|---|---|
+| Commands such as `/fn`, `/fc`, `/mode` | `src/commands.ts` |
+| Permission modes | `src/mode-policy.ts` |
+| Claude / Codex / Gemini invocation | `src/*-driver.ts` |
+| Message queue | `src/queue.ts` |
+| IM receive path | `src/feishu.ts` or `src/wechat.ts` |
+| CLI entrypoint | `bin/im2cc.ts` |
+| Shell commands | `shell/im2cc-shell-functions.zsh` |
+| Session binding | `src/session.ts` and `src/registry.ts` |
+| Configuration | `src/config.ts`; runtime data is under `~/.im2cc/` |
+| Daemon lifecycle | `src/index.ts` and `src/daemon-process.ts` |
+
+### Verification
+
+Run the checks relevant to the change; TypeScript changes must at least compile:
+
+```bash
+npm run build
+node scripts/mode-policy.test.mjs
+node scripts/tool-cli-args.test.mjs
+node scripts/support-policy.test.mjs
+```
+
+## Onboarding and release workflows
+
 This repository includes:
 - a full onboarding workflow for installing, configuring, validating, and hardening im2cc on a user's machine (below);
 - a maintainer release SOP at [`RELEASE.md`](./RELEASE.md) — **any AI assistant asked to "push" / "release" / "publish" im2cc must follow RELEASE.md step-by-step**, not improvise. Do not run `npm publish` without explicit maintainer authorization in the current conversation.
